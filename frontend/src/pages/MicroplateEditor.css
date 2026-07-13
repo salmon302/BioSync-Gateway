@@ -1,0 +1,73 @@
+.microplate-editor {
+  padding: 20px;
+}
+
+.placeholder-text {
+  color: #666;
+  font-style: italic;
+  margin-bottom: 20px;
+}
+
+.plate-controls {
+  margin-bottom: 20px;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.plate-controls label {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.plate-controls select {
+  padding: 5px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+}
+
+.plate-grid {
+  display: grid;
+  gap: 5px;
+  margin: 20px 0;
+  padding: 20px;
+  background-color: white;
+  border: 2px solid var(--border-color);
+  border-radius: 8px;
+}
+
+.plate-grid.96-well {
+  grid-template-columns: repeat(12, 1fr);
+}
+
+.plate-grid.384-well {
+  grid-template-columns: repeat(24, 1fr);
+}
+
+.well-placeholder {
+  aspect-ratio: 1;
+  background-color: #e0e0e0;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+.well-placeholder:hover {
+  background-color: #d0d0d0;
+}
+
+.well-details-placeholder {
+  margin-top: 20px;
+  padding: 20px;
+  background-color: white;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  text-align: center;
+  color: #666;
+}

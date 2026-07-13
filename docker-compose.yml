@@ -1,0 +1,85 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database with pgcrypto extension
+  db:
+    image: postgres:15-alpine
+    container_name: biosync-db
+    environment:
+      POSTGRES_DB: biosync
+      POSTGRES_USER: biosync_user
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-biosync_secure_password}
+      POSTGRES_INITDB_ARGS: "--encoding=UTF-8 --locale=C"
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database/migrations:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U biosync_user -d biosync"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - biosync-network
+
+  # FastAPI Middleware
+  middleware:
+    build:
+      context: ./middleware
+      dockerfile: Dockerfile
+    container_name: biosync-middleware
+    environment:
+      - DATABASE_URL=postgresql://biosync_user:${DB_PASSWORD:-biosync_secure_password}@db:5432/biosync
+      - JWT_SECRET=${JWT_SECRET:-your-super-secret-jwt-key-change-in-production}
+      - ENVIRONMENT=development
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./middleware:/app
+      - ./database:/app/database
+    depends_on:
+      db:
+        condition: service_healthy
+    command: uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload
+    networks:
+      - biosync-network
+
+  # React Frontend (Development Server)
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: biosync-frontend
+    environment:
+      - VITE_API_URL=http://localhost:8000
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    command: npm run dev -- --host 0.0.0.0
+    networks:
+      - biosync-network
+
+  # Adminer for database management (development only)
+  adminer:
+    image: adminer:latest
+    container_name: biosync-adminer
+    ports:
+      - "8080:8080"
+    environment:
+      ADMINER_DEFAULT_SERVER: db
+    depends_on:
+      - db
+    networks:
+      - biosync-network
+    profiles:
+      - dev-tools
+
+networks:
+  biosync-network:
+    driver: bridge
+
+volumes:
+  postgres_data:
