@@ -27,6 +27,8 @@ async def lifespan(app: FastAPI):
     Application lifespan manager.
     Handles startup and shutdown events.
     """
+    import asyncio
+    
     # Startup
     logger.info("Starting BioSync-Gateway middleware...")
     try:
@@ -36,10 +38,50 @@ async def lifespan(app: FastAPI):
         logger.error(f"Failed to initialize engines: {e}")
         raise
     
+    # Start telemetry broadcast task
+    from api.routes.telemetry import manager as telemetry_manager
+    app.state.telemetry_task = asyncio.create_task(_telemetry_broadcast_task(telemetry_manager))
+    logger.info("Telemetry broadcast task started")
+    
     yield
     
     # Shutdown
     logger.info("Shutting down BioSync-Gateway middleware...")
+    # Cancel telemetry task
+    if hasattr(app.state, 'telemetry_task'):
+        app.state.telemetry_task.cancel()
+        try:
+            await app.state.telemetry_task
+        except asyncio.CancelledError:
+            pass
+        logger.info("Telemetry broadcast task stopped")
+
+
+async def _telemetry_broadcast_task(manager):
+    """Background task that generates and broadcasts telemetry data."""
+    from api.routes.telemetry_generator import TelemetryGenerator
+    import asyncio
+    from datetime import datetime
+    
+    gen = TelemetryGenerator()
+    logger.info("Telemetry generator started")
+    
+    while True:
+        try:
+            data = gen.generate_timestep(dt=0.1)
+            message = {
+                "type": "telemetry",
+                "payload": data,
+                "timestamp": datetime.utcnow().isoformat()
+            }
+            await manager.broadcast(message)
+            await asyncio.sleep(0.1)
+        except asyncio.CancelledError:
+            logger.info("Telemetry broadcast task cancelled")
+            break
+        except Exception as e:
+            logger.error(f"Telemetry broadcast error: {e}")
+            await asyncio.sleep(1)
 
 
 # Create FastAPI application
@@ -53,7 +95,12 @@ app = FastAPI(
 # Configure CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://localhost:8080"],
+    allow_origins=[
+        "http://localhost:3000",
+        "http://localhost:3001",
+        "http://localhost:5173",
+        "http://localhost:8080"
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

@@ -2,32 +2,48 @@
   padding: 20px;
 }
 
-.placeholder-text {
+.microplate-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 20px;
+}
+
+.microplate-header h2 {
+  margin: 0;
+}
+
+.plate-info h3 {
+  margin: 0 0 4px 0;
+}
+
+.plate-info p {
+  margin: 2px 0;
+  font-size: 14px;
   color: #666;
-  font-style: italic;
-  margin-bottom: 20px;
 }
 
-.plate-controls {
+.microplate-controls {
   margin-bottom: 20px;
   display: flex;
   gap: 10px;
   align-items: center;
+  flex-wrap: wrap;
 }
 
-.plate-controls label {
+.microplate-controls label {
   display: flex;
   align-items: center;
   gap: 10px;
 }
 
-.plate-controls select {
+.microplate-controls select {
   padding: 5px 10px;
   border: 1px solid var(--border-color);
   border-radius: 4px;
 }
 
-.plate-grid {
+.microplate-grid {
   display: grid;
   gap: 5px;
   margin: 20px 0;
@@ -35,39 +51,126 @@
   background-color: white;
   border: 2px solid var(--border-color);
   border-radius: 8px;
+  user-select: none;
 }
 
-.plate-grid.96-well {
+.microplate-grid.\39 6-well {
   grid-template-columns: repeat(12, 1fr);
 }
 
-.plate-grid.384-well {
+.microplate-grid.\33 84-well {
   grid-template-columns: repeat(24, 1fr);
 }
 
-.well-placeholder {
+.well {
   aspect-ratio: 1;
   background-color: #e0e0e0;
   border: 1px solid #ccc;
   border-radius: 4px;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
   font-size: 10px;
   cursor: pointer;
   transition: background-color 0.2s;
+  position: relative;
+  overflow: hidden;
 }
 
-.well-placeholder:hover {
+.well:hover {
   background-color: #d0d0d0;
 }
 
-.well-details-placeholder {
-  margin-top: 20px;
-  padding: 20px;
-  background-color: white;
-  border: 1px solid var(--border-color);
-  border-radius: 8px;
-  text-align: center;
+.well.selected {
+  border-color: var(--primary-color);
+  box-shadow: 0 0 0 2px var(--primary-color);
+}
+
+.well.pending {
+  background-color: #fff3cd;
+}
+
+.well.processed {
+  background-color: #d4edda;
+}
+
+.well.error {
+  background-color: #f8d7da;
+}
+
+.well-label {
+  font-weight: bold;
+  font-size: 9px;
+  color: #333;
+}
+
+.well-sample {
+  font-size: 8px;
   color: #666;
+  text-overflow: ellipsis;
+  overflow: hidden;
+  max-width: 90%;
+}
+
+.selection-info {
+  margin-top: 12px;
+  padding: 10px;
+  background: var(--bg-secondary, #f5f5f5);
+  border-radius: 4px;
+  font-size: 13px;
+}
+
+.keyboard-hints {
+  margin-top: 12px;
+  padding: 10px;
+  background: var(--bg-secondary, #f5f5f5);
+  border-radius: 4px;
+  font-size: 13px;
+}
+
+.keyboard-hints kbd {
+  background: #eee;
+  border: 1px solid #ccc;
+  border-radius: 3px;
+  padding: 1px 5px;
+  font-size: 11px;
+}
+
+.observation-overlay {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  background: white;
+  border: 2px solid var(--primary-color);
+  border-radius: 8px;
+  padding: 24px;
+  z-index: 1000;
+  min-width: 350px;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.2);
+}
+
+.observation-overlay h3 {
+  margin-top: 0;
+}
+
+.observation-overlay .close-btn {
+  position: absolute;
+  top: 10px;
+  right: 14px;
+  background: none;
+  border: none;
+  font-size: 22px;
+  cursor: pointer;
+  color: #666;
+}
+
+.observation-overlay .close-btn:hover {
+  color: #000;
+}
+
+.observation-details p {
+  margin: 6px 0;
+  font-size: 14px;
 }

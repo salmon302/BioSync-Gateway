@@ -3,25 +3,41 @@ FHIR Routes
 Implements SRS §3.7 - FHIR Interoperability
 """
 
-from fastapi import APIRouter, Depends
-from typing import List
+from fastapi import APIRouter, Depends, HTTPException
+from typing import Dict, Any
 
 from api.auth import get_current_user, require_scope
+from fhir_validator import validate_resource
 
 router = APIRouter()
 
 
 @router.post("/Observation")
 async def create_observation(
-    observation: dict,
+    observation: Dict[str, Any],
     current_user=Depends(require_scope("fhir_write"))
 ):
     """
     Create FHIR Observation resource.
     Implements SRS FR-3.7.3
+    
+    Args:
+        observation: FHIR Observation resource
+    
+    Returns:
+        Created resource or OperationOutcome error
     """
-    # Placeholder - will implement FHIR validation
-    return {"status": "created", "id": "placeholder"}
+    # Validate resource
+    is_valid, operation_outcome = validate_resource(observation)
+    
+    if not is_valid:
+        raise HTTPException(
+            status_code=400,
+            detail=operation_outcome
+        )
+    
+    # TODO: Store in database
+    return {"status": "created", "id": "placeholder", "resource": observation}
 
 
 @router.get("/Observation/{observation_id}")
@@ -36,15 +52,30 @@ async def get_observation(
 
 @router.post("/DeviceMetric")
 async def create_device_metric(
-    device_metric: dict,
+    device_metric: Dict[str, Any],
     current_user=Depends(require_scope("fhir_write"))
 ):
     """
     Create FHIR DeviceMetric resource.
     Implements SRS FR-3.7.2
+    
+    Args:
+        device_metric: FHIR DeviceMetric resource
+    
+    Returns:
+        Created resource or OperationOutcome error
     """
-    # Placeholder
-    return {"status": "created", "id": "placeholder"}
+    # Validate resource
+    is_valid, operation_outcome = validate_resource(device_metric)
+    
+    if not is_valid:
+        raise HTTPException(
+            status_code=400,
+            detail=operation_outcome
+        )
+    
+    # TODO: Store in database
+    return {"status": "created", "id": "placeholder", "resource": device_metric}
 
 
 @router.post("/Bundle")

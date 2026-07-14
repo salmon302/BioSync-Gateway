@@ -1,0 +1,95 @@
+.telemetry-dashboard {
+  padding: 20px;
+}
+
+.dashboard-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+}
+
+.dashboard-header h2 {
+  margin: 0;
+}
+
+.connection-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+}
+
+.status-indicator {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.status-indicator.connected {
+  background-color: #28a745;
+  box-shadow: 0 0 6px rgba(40, 167, 69, 0.5);
+}
+
+.status-indicator.disconnected {
+  background-color: #dc3545;
+}
+
+.chart-container {
+  width: 100%;
+  height: 480px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: #fff;
+  margin-bottom: 16px;
+}
+
+.telemetry-controls {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+
+.telemetry-controls button {
+  padding: 8px 16px;
+  border: 1px solid var(--primary-color);
+  border-radius: 4px;
+  background: var(--primary-color);
+  color: #fff;
+  cursor: pointer;
+  font-size: 14px;
+  transition: opacity 0.2s;
+}
+
+.telemetry-controls button:hover:not(:disabled) {
+  opacity: 0.85;
+}
+
+.telemetry-controls button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.telemetry-info {
+  padding: 12px;
+  background: var(--bg-secondary, #f5f5f5);
+  border-radius: 4px;
+  font-size: 13px;
+}
+
+.telemetry-info p {
+  margin: 4px 0;
+}
+
+.alarm-indicator {
+  color: #dc3545;
+  font-weight: bold;
+  animation: alarm-pulse 1s ease-in-out infinite;
+}
+
+@keyframes alarm-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}

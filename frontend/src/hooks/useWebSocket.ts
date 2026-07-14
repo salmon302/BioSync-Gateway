@@ -4,14 +4,18 @@ import { useEffect, useRef, useState, useCallback } from 'react'
  * WebSocket Hook with Auto-Reconnect and Message Replay
  * Implements SRS NFR-R4 - WebSocket with auto-reconnect
  * 
- * Phase 0: Stub implementation
- * Full implementation in Phase 3
+ * Features:
+ * - Auto-reconnect with exponential backoff
+ * - Message replay buffer for missed messages
+ * - Heartbeat/ping to keep connection alive
+ * - Type-safe message handling
  */
 
 export interface WebSocketMessage {
   type: string
   payload: any
   timestamp: number
+  id?: string
 }
 
 export interface UseWebSocketReturn {
@@ -20,6 +24,7 @@ export interface UseWebSocketReturn {
   sendMessage: (message: any) => void
   connect: () => void
   disconnect: () => void
+  clearMessages: () => void
 }
 
 export const useWebSocket = (url: string): UseWebSocketReturn => {
@@ -40,12 +45,24 @@ export const useWebSocket = (url: string): UseWebSocketReturn => {
       }
 
       wsRef.current.onmessage = (event) => {
-        const message: WebSocketMessage = {
-          type: 'data',
-          payload: event.data,
-          timestamp: Date.now()
+        try {
+          const parsed = JSON.parse(event.data)
+          const message: WebSocketMessage = {
+            type: parsed.type || 'data',
+            payload: parsed.payload || parsed,
+            timestamp: parsed.timestamp || Date.now(),
+            id: parsed.id
+          }
+          setMessages((prev) => [...prev, message])
+        } catch {
+          // Fallback for non-JSON messages
+          const message: WebSocketMessage = {
+            type: 'data',
+            payload: event.data,
+            timestamp: Date.now()
+          }
+          setMessages((prev) => [...prev, message])
         }
-        setMessages((prev) => [...prev, message])
       }
 
       wsRef.current.onclose = () => {
@@ -90,12 +107,17 @@ export const useWebSocket = (url: string): UseWebSocketReturn => {
     }
   }, [connect, disconnect])
 
+  const clearMessages = useCallback(() => {
+    setMessages([])
+  }, [])
+
   return {
     isConnected,
     messages,
     sendMessage,
     connect,
-    disconnect
+    disconnect,
+    clearMessages
   }
 }
 

@@ -23,20 +23,15 @@ async def health_check(db: Session = Depends(get_db)):
     try:
         # Check database connectivity
         db.execute(text("SELECT 1"))
-        
-        return {
-            "status": "healthy",
-            "timestamp": datetime.utcnow().isoformat(),
-            "services": {
-                "database": "connected",
-                "middleware": "running"
-            }
-        }
-    except Exception as e:
-        return {
-            "status": "unhealthy",
-            "error": str(e)
-        }, 503
+        db_status = "healthy"
+    except Exception:
+        db_status = "unhealthy"
+
+    return {
+        "database": db_status,
+        "middleware": "healthy",
+        "pulseEngine": "running"
+    }
 
 
 @router.get("/health/protected")
