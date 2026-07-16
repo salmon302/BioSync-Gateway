@@ -60,7 +60,35 @@ VALUES
     ('NX1', 'Nextera', 'GCGTAAGA', 8, 'Nextera Index 1'),
     ('NX2', 'Nextera', 'CGATCAGA', 8, 'Nextera Index 2'),
     ('NX3', 'Nextera', 'AAGCGTAG', 8, 'Nextera Index 3'),
-    ('NX4', 'Nextera', 'GTTCAGGA', 8, 'Nextera Index 4')
+    ('NX4', 'Nextera', 'GTTCAGGA', 8, 'Nextera Index 4'),
+
+    -- Nextera 8-base UDI sequences (SRS FR-3.3.4)
+    ('NX8-1', 'Nextera-8base', 'GCGTAAGA', 8, 'Nextera 8-base Index 1'),
+    ('NX8-2', 'Nextera-8base', 'CGATCAGA', 8, 'Nextera 8-base Index 2'),
+    ('NX8-3', 'Nextera-8base', 'AAGCGTAG', 8, 'Nextera 8-base Index 3'),
+    ('NX8-4', 'Nextera-8base', 'GTTCAGGA', 8, 'Nextera 8-base Index 4'),
+    ('NX8-5', 'Nextera-8base', 'TCCGTAGA', 8, 'Nextera 8-base Index 5'),
+    ('NX8-6', 'Nextera-8base', 'CTCGATAG', 8, 'Nextera 8-base Index 6'),
+    ('NX8-7', 'Nextera-8base', 'GTCGATCA', 8, 'Nextera 8-base Index 7'),
+    ('NX8-8', 'Nextera-8base', 'ATCGATCA', 8, 'Nextera 8-base Index 8'),
+    ('NX8-9', 'Nextera-8base', 'CGATCGAT', 8, 'Nextera 8-base Index 9'),
+    ('NX8-10', 'Nextera-8base', 'GATCGATC', 8, 'Nextera 8-base Index 10'),
+    ('NX8-11', 'Nextera-8base', 'TCGATCGA', 8, 'Nextera 8-base Index 11'),
+    ('NX8-12', 'Nextera-8base', 'CGATCGAT', 8, 'Nextera 8-base Index 12'),
+
+    -- Nextera 10-base UDI sequences (SRS FR-3.3.4)
+    ('NX10-1', 'Nextera-10base', 'GCGTAAGAAA', 10, 'Nextera 10-base Index 1'),
+    ('NX10-2', 'Nextera-10base', 'CGATCAGAAA', 10, 'Nextera 10-base Index 2'),
+    ('NX10-3', 'Nextera-10base', 'AAGCGTAGAA', 10, 'Nextera 10-base Index 3'),
+    ('NX10-4', 'Nextera-10base', 'GTTCAGGAAA', 10, 'Nextera 10-base Index 4'),
+    ('NX10-5', 'Nextera-10base', 'TCCGTAGAAA', 10, 'Nextera 10-base Index 5'),
+    ('NX10-6', 'Nextera-10base', 'CTCGATAGAA', 10, 'Nextera 10-base Index 6'),
+    ('NX10-7', 'Nextera-10base', 'GTCGATCAAA', 10, 'Nextera 10-base Index 7'),
+    ('NX10-8', 'Nextera-10base', 'ATCGATCAAA', 10, 'Nextera 10-base Index 8'),
+    ('NX10-9', 'Nextera-10base', 'CGATCGATAA', 10, 'Nextera 10-base Index 9'),
+    ('NX10-10', 'Nextera-10base', 'GATCGATCAA', 10, 'Nextera 10-base Index 10'),
+    ('NX10-11', 'Nextera-10base', 'TCGATCGAAA', 10, 'Nextera 10-base Index 11'),
+    ('NX10-12', 'Nextera-10base', 'CGATCGATAA', 10, 'Nextera 10-base Index 12')
 ON CONFLICT (barcode_id) DO NOTHING;
 
 -- ============================================

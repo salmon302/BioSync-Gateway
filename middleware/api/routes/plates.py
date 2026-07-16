@@ -3,7 +3,11 @@ Microplate Routes
 Implements SRS §3.2 - Microplate Editor
 """
 
-from fastapi import APIRouter, Depends, Query
+import csv
+import io
+import json
+from fastapi import APIRouter, Depends, Query, UploadFile, File, HTTPException
+from fastapi.responses import StreamingResponse
 from typing import List, Optional
 
 from api.auth import get_current_user, require_scope
@@ -163,3 +167,108 @@ async def generate_dilution_worklist(
         }
     
     return worklist
+
+
+@router.post("/{plate_id}/import")
+async def import_plate(
+    plate_id: int,
+    file: UploadFile = File(...),
+    current_user=Depends(require_scope("plate_write"))
+):
+    """
+    Import plate layout from CSV or JSON file.
+    Implements SRS FR-3.2.5 (Import/Export)
+    
+    Args:
+        plate_id: Database ID of the plate
+        file: Uploaded CSV or JSON file
+    
+    Returns:
+        Parsed plate layout data
+    """
+    content = await file.read()
+    filename = file.filename or ""
+    
+    try:
+        if filename.lower().endswith('.json'):
+            data = json.loads(content.decode('utf-8'))
+            # Expect format: {"rows": 8, "cols": 12, "wells": {"A1": {...}}}
+            if not isinstance(data, dict) or 'wells' not in data:
+                raise ValueError("Invalid JSON format: expected 'wells' key")
+            wells = data['wells']
+        elif filename.lower().endswith('.csv'):
+            text = content.decode('utf-8')
+            reader = csv.DictReader(io.StringIO(text))
+            wells = {}
+            for row in reader:
+                well_id = row.get('well') or row.get('Well') or row.get('position')
+                if not well_id:
+                    continue
+                wells[well_id] = {k: v for k, v in row.items() if k not in ('well', 'Well', 'position')}
+        else:
+            raise ValueError("Unsupported file format. Use .csv or .json")
+    except (json.JSONDecodeError, UnicodeDecodeError, ValueError) as e:
+        raise HTTPException(status_code=400, detail=f"Import failed: {str(e)}")
+    
+    return {
+        "plate_id": plate_id,
+        "imported_wells": len(wells),
+        "wells": wells,
+        "format": "json" if filename.lower().endswith('.json') else "csv"
+    }
+
+
+@router.get("/{plate_id}/export")
+async def export_plate(
+    plate_id: int,
+    format: str = Query("json", pattern="^(json|csv)$"),
+    current_user=Depends(require_scope("plate_read"))
+):
+    """
+    Export plate layout as CSV or JSON.
+    Implements SRS FR-3.2.5 (Import/Export)
+    
+    Args:
+        plate_id: Database ID of the plate
+        format: Output format ('json' or 'csv')
+    
+    Returns:
+        Streaming file response with plate data
+    """
+    # Placeholder data - in production, query database for plate layout
+    placeholder_wells = {
+        "A1": {"sample_id": "S001", "barcode": "ATCACG", "concentration": "10µM"},
+        "A2": {"sample_id": "S002", "barcode": "CGATGT", "concentration": "10µM"},
+        "B1": {"sample_id": "S003", "barcode": "TTCCGA", "concentration": "5µM"},
+    }
+    
+    if format == "csv":
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow(["well", "sample_id", "barcode", "concentration"])
+        for well_id, data in placeholder_wells.items():
+            writer.writerow([
+                well_id,
+                data.get("sample_id", ""),
+                data.get("barcode", ""),
+                data.get("concentration", "")
+            ])
+        media_type = "text/csv"
+        filename = f"plate_{plate_id}.csv"
+    else:
+        output = io.StringIO()
+        json.dump({
+            "plate_id": plate_id,
+            "rows": 8,
+            "cols": 12,
+            "wells": placeholder_wells
+        }, output, indent=2)
+        media_type = "application/json"
+        filename = f"plate_{plate_id}.json"
+    
+    output.seek(0)
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type=media_type,
+        headers={"Content-Disposition": f"attachment; filename={filename}"}
+    )

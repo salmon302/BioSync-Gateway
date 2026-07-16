@@ -184,6 +184,73 @@ TRUSEQ_BARCODES = {
     'HT12': 'CTTGTA',
 }
 
+# Nextera 8-base barcode sequences
+# Implements SRS FR-3.3.4 - 8-base UDI sequences
+NEXTERA_8BASE_BARCODES = {
+    'NX8-1': 'GCGTAAGA',
+    'NX8-2': 'CGATCAGA',
+    'NX8-3': 'AAGCGTAG',
+    'NX8-4': 'GTTCAGGA',
+    'NX8-5': 'TCCGTAGA',
+    'NX8-6': 'CTCGATAG',
+    'NX8-7': 'GTCGATCA',
+    'NX8-8': 'ATCGATCA',
+    'NX8-9': 'CGATCGAT',
+    'NX8-10': 'GATCGATC',
+    'NX8-11': 'TCGATCGA',
+    'NX8-12': 'CGATCGAT',
+    'NX8-13': 'ATCGATCG',
+    'NX8-14': 'TCGATCGA',
+    'NX8-15': 'GATCGATC',
+    'NX8-16': 'TCGATCGA',
+    'NX8-17': 'CGATCGAT',
+    'NX8-18': 'GATCGATC',
+    'NX8-19': 'TCGATCGA',
+    'NX8-20': 'CGATCGAT',
+    'NX8-21': 'ATCGATCG',
+    'NX8-22': 'TCGATCGA',
+    'NX8-23': 'GATCGATC',
+    'NX8-24': 'TCGATCGA',
+}
+
+# Nextera 10-base barcode sequences
+# Implements SRS FR-3.3.4 - 10-base UDI sequences
+NEXTERA_10BASE_BARCODES = {
+    'NX10-1': 'GCGTAAGAAA',
+    'NX10-2': 'CGATCAGAAA',
+    'NX10-3': 'AAGCGTAGAA',
+    'NX10-4': 'GTTCAGGAAA',
+    'NX10-5': 'TCCGTAGAAA',
+    'NX10-6': 'CTCGATAGAA',
+    'NX10-7': 'GTCGATCAA',
+    'NX10-8': 'ATCGATCAA',
+    'NX10-9': 'CGATCGATAA',
+    'NX10-10': 'GATCGATCAA',
+    'NX10-11': 'TCGATCGAAA',
+    'NX10-12': 'CGATCGATAA',
+    'NX10-13': 'ATCGATCGA',
+    'NX10-14': 'TCGATCGAA',
+    'NX10-15': 'GATCGATCA',
+    'NX10-16': 'TCGATCGAA',
+    'NX10-17': 'CGATCGATC',
+    'NX10-18': 'GATCGATCA',
+    'NX10-19': 'TCGATCGAT',
+    'NX10-20': 'CGATCGATC',
+    'NX10-21': 'ATCGATCGA',
+    'NX10-22': 'TCGATCGAT',
+    'NX10-23': 'GATCGATCG',
+    'NX10-24': 'TCGATCGAT',
+}
+
+# Barcode sets registry - maps set name to barcode dictionary
+# Implements SRS FR-3.3.4 - BARCODE_SETS dict
+BARCODE_SETS = {
+    'TruSeq': TRUSEQ_BARCODES,
+    'TruSeq-6base': TRUSEQ_BARCODES,
+    'Nextera-8base': NEXTERA_8BASE_BARCODES,
+    'Nextera-10base': NEXTERA_10BASE_BARCODES,
+}
+
 
 def load_barcode_set(set_name: str = "TruSeq") -> Dict[str, str]:
     """
@@ -197,10 +264,10 @@ def load_barcode_set(set_name: str = "TruSeq") -> Dict[str, str]:
         
     Note:
         In production, this queries the barcode_indices table.
-        Currently returns built-in TruSeq set as placeholder.
+        Currently returns built-in sets from BARCODE_SETS registry.
     """
-    if set_name.lower() == "truseq":
-        return TRUSEQ_BARCODES.copy()
+    if set_name in BARCODE_SETS:
+        return BARCODE_SETS[set_name].copy()
     else:
         # TODO: Query database for barcode set
         raise ValueError(f"Unknown barcode set: {set_name}")

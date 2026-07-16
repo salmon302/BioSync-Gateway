@@ -326,6 +326,30 @@ class FHIRValidator:
         return outcome
 
 
+def to_operation_outcome(errors: List[ValidationError]) -> Dict:
+    """
+    Create OperationOutcome resource from validation errors.
+    
+    Args:
+        errors: List of ValidationError objects
+    
+    Returns:
+        FHIR OperationOutcome resource with application/fhir+json content type
+        
+    Implements:
+        SRS FR-3.7.4 - OperationOutcome error responses
+    """
+    issues = [err.to_operation_outcome() for err in errors]
+    
+    outcome = {
+        "resourceType": "OperationOutcome",
+        "id": "validation-result",
+        "issue": issues
+    }
+    
+    return outcome
+
+
 # Convenience functions for API endpoints
 def validate_resource(resource: Dict) -> Tuple[bool, Optional[Dict]]:
     """

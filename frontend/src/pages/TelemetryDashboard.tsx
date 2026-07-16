@@ -14,6 +14,7 @@ import './TelemetryDashboard.css'
  * - Zoom (5s minimum) and pan
  * - Alarm visualization (threshold trace → red within 100 ms)
  * - WebSocket streaming with auto-reconnect
+ * - FPS counter for performance monitoring
  */
 interface TelemetryDataPoint {
   timestamp: number
@@ -32,6 +33,12 @@ const TelemetryDashboard: React.FC = () => {
   const [isStreaming, setIsStreaming] = useState(false)
   const [dataPoints, setDataPoints] = useState<TelemetryDataPoint[]>([])
   const dataBuffer = useRef<TelemetryDataPoint[]>([])
+
+  // Performance tracking
+  const [fps, setFps] = useState<number>(0)
+  const frameCountRef = useRef<number>(0)
+  const lastFpsUpdateRef = useRef<number>(0)
+  const fpsIntervalRef = useRef<NodeJS.Timeout | null>(null)
 
   // Alarm thresholds (SRS FR-3.1.5)
   const alarmThresholds = useRef({
@@ -69,9 +76,10 @@ const TelemetryDashboard: React.FC = () => {
     return anyAlarm
   }
   
-  // WebSocket connection
+  // WebSocket connection with JWT auth (SRS NFR-R4)
   const wsUrl = 'ws://localhost:8000/api/telemetry/stream'
-  const { isConnected, messages, sendMessage, connect, disconnect } = useWebSocket(wsUrl)
+  const token = typeof window !== 'undefined' ? localStorage.getItem('biosync_token') || undefined : undefined
+  const { isConnected, messages, sendMessage, connect, disconnect } = useWebSocket(wsUrl, token)
 
   // Initialize chart
   useEffect(() => {
@@ -327,6 +335,34 @@ const TelemetryDashboard: React.FC = () => {
     })
   }
 
+  // FPS tracking for performance monitoring
+  useEffect(() => {
+    const updateFps = () => {
+      const now = performance.now()
+      frameCountRef.current += 1
+      
+      if (now - lastFpsUpdateRef.current >= 1000) {
+        setFps(frameCountRef.current)
+        frameCountRef.current = 0
+        lastFpsUpdateRef.current = now
+      }
+      
+      if (isStreaming) {
+        requestAnimationFrame(updateFps)
+      }
+    }
+    
+    if (isStreaming) {
+      requestAnimationFrame(updateFps)
+    }
+    
+    return () => {
+      if (fpsIntervalRef.current) {
+        clearInterval(fpsIntervalRef.current)
+      }
+    }
+  }, [isStreaming])
+
   return (
     <div className="telemetry-dashboard">
       <div className="dashboard-header">
@@ -334,6 +370,9 @@ const TelemetryDashboard: React.FC = () => {
         <div className="connection-status">
           <span className={`status-indicator ${isConnected ? 'connected' : 'disconnected'}`} />
           <span>{isConnected ? 'Connected' : 'Disconnected'}</span>
+          {isStreaming && (
+            <span className="fps-counter">FPS: {fps}</span>
+          )}
         </div>
       </div>
       

@@ -15,7 +15,8 @@ logger = logging.getLogger(__name__)
 # JWT Configuration (should be loaded from environment variables)
 JWT_SECRET = "your-super-secret-jwt-key-change-in-production"
 JWT_ALGORITHM = "HS256"
-JWT_EXPIRATION_HOURS = 24
+JWT_EXPIRATION_HOURS = 1
+JWT_REFRESH_EXPIRATION_DAYS = 7
 
 security = HTTPBearer()
 
@@ -109,6 +110,62 @@ def create_access_token(data: dict, expires_delta: Optional[int] = None) -> str:
     return encoded_jwt
 
 
+def create_refresh_token(data: dict) -> str:
+    """
+    Create a JWT refresh token with extended expiration.
+    
+    Args:
+        data: Payload to encode in token
+    
+    Returns:
+        Encoded JWT refresh token string
+    """
+    from datetime import datetime, timedelta
+    
+    to_encode = data.copy()
+    to_encode.update({
+        "exp": datetime.utcnow() + timedelta(days=JWT_REFRESH_EXPIRATION_DAYS),
+        "type": "refresh",
+    })
+    
+    encoded_jwt = jwt.encode(to_encode, JWT_SECRET, algorithm=JWT_ALGORITHM)
+    return encoded_jwt
+
+
+def verify_refresh_token(token: str) -> Optional[User]:
+    """
+    Verify a refresh token and return the associated User.
+    
+    Args:
+        token: JWT refresh token string
+    
+    Returns:
+        User object if valid, None otherwise
+    """
+    try:
+        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        
+        if payload.get("type") != "refresh":
+            return None
+        
+        username: str = payload.get("sub")
+        role: str = payload.get("role")
+        scopes: List[str] = payload.get("scopes", [])
+        
+        if username is None:
+            return None
+            
+    except JWTError:
+        return None
+    
+    return User(
+        username=username,
+        email=f"{username}@biosync.local",
+        role=role or "user",
+        scopes=scopes or [],
+    )
+
+
 def require_scope(required_scope: str):
     """
     Dependency factory for scope-based authorization.
@@ -126,3 +183,22 @@ def require_scope(required_scope: str):
             )
         return user
     return scope_checker
+
+
+def verify_token(token: str) -> Optional[dict]:
+    """
+    Verify a JWT token and return its payload.
+    Used for WebSocket authentication where Depends() is not available.
+    
+    Args:
+        token: JWT token string
+    
+    Returns:
+        Decoded payload dict if valid, None otherwise
+    """
+    try:
+        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        return payload
+    except JWTError as e:
+        logger.warning(f"Token verification failed: {e}")
+        return None

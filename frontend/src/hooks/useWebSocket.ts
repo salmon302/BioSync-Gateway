@@ -27,7 +27,7 @@ export interface UseWebSocketReturn {
   clearMessages: () => void
 }
 
-export const useWebSocket = (url: string): UseWebSocketReturn => {
+export const useWebSocket = (url: string, token?: string): UseWebSocketReturn => {
   const [isConnected, setIsConnected] = useState(false)
   const [messages, setMessages] = useState<WebSocketMessage[]>([])
   const wsRef = useRef<WebSocket | null>(null)
@@ -36,7 +36,9 @@ export const useWebSocket = (url: string): UseWebSocketReturn => {
 
   const connect = useCallback(() => {
     try {
-      wsRef.current = new WebSocket(url)
+      // Append token as query parameter for JWT auth (SRS NFR-R4)
+      const wsUrl = token ? `${url}?token=${encodeURIComponent(token)}` : url
+      wsRef.current = new WebSocket(wsUrl)
 
       wsRef.current.onopen = () => {
         console.log('WebSocket connected')

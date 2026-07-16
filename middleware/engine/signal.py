@@ -173,19 +173,42 @@ class MultiChannelEMAFilter:
     
     Manages separate EMA filters for each telemetry channel
     (pressure, flow, HR, SpO₂, etc.)
+    
+    Implements SRS FR-3.5.1 - Per-channel alpha defaults:
+        - pressure: α = 0.2 (slow response for stability)
+        - flow: α = 0.1 (slowest response for noise reduction)
+        - hr: α = 0.3 (moderate response)
+        - spo2: α = 0.25 (moderate response)
     """
     
-    def __init__(self, alpha: float = 0.5, channels: List[str] = None):
+    # Per-channel alpha defaults (SRS FR-3.5.1)
+    DEFAULT_ALPHAS = {
+        'pressure': 0.2,
+        'flow': 0.1,
+        'hr': 0.3,
+        'spo2': 0.25,
+    }
+    
+    def __init__(self, alpha: float = 0.5, channels: List[str] = None, alphas: dict = None):
         """
-        Initialize multi-channel filter.
+        Initialize multi-channel filter with per-channel alpha values.
         
         Args:
-            alpha: Smoothing factor for all channels
+            alpha: Default smoothing factor for channels without specific alpha
             channels: List of channel names
+            alphas: Optional dict mapping channel names to specific alpha values
         """
         self.alpha = alpha
-        self.channels = channels or ['pressure', 'flow', 'hr', 'spo2']
-        self.filters = {ch: EMAFilter(alpha) for ch in self.channels}
+        self.channels = channels or list(self.DEFAULT_ALPHAS.keys())
+        
+        # Use provided alphas or defaults
+        channel_alphas = alphas or {}
+        
+        # Create filters with per-channel alpha values
+        self.filters = {}
+        for ch in self.channels:
+            ch_alpha = channel_alphas.get(ch, self.DEFAULT_ALPHAS.get(ch, alpha))
+            self.filters[ch] = EMAFilter(ch_alpha)
     
     def filter_observation(self, observation: dict) -> dict:
         """

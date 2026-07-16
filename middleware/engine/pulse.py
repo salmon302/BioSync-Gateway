@@ -13,7 +13,19 @@ import asyncio
 import json
 import time
 import hashlib
+import uuid
+import logging
 from concurrent.futures import ProcessPoolExecutor, Future
+
+logger = logging.getLogger(__name__)
+
+# Database persistence (optional - gracefully degrades if DB unavailable)
+try:
+    from database import SessionLocal
+    from models import Simulation as SimulationModel
+    DB_AVAILABLE = True
+except ImportError:
+    DB_AVAILABLE = False
 
 
 class SimulationState(Enum):
@@ -396,6 +408,23 @@ class SimulationManager:
             raise RuntimeError(f"Failed to initialize simulation {simulation_id}")
         
         self.simulations[simulation_id] = worker
+        
+        # Persist to database (SRS FR-3.6.3)
+        if DB_AVAILABLE:
+            try:
+                db = SessionLocal()
+                sim_record = SimulationModel(
+                    simulation_uid=str(uuid.uuid4()),
+                    patient_id=patient_config.patient_id,
+                    engine_state={"status": "active", "initialized": True},
+                    status="active"
+                )
+                db.add(sim_record)
+                db.commit()
+                db.close()
+            except Exception as e:
+                logger.warning(f"Failed to persist simulation to DB: {e}")
+        
         return simulation_id
     
     async def step_simulation(self, simulation_id: str, n_steps: int = 1) -> Dict:
@@ -438,14 +467,26 @@ class SimulationManager:
         if simulation_id not in self.simulations:
             raise ValueError(f"Simulation {simulation_id} not found")
         
-        return self.simulations[simulation_id].pause()
+        state = self.simulations[simulation_id].pause()
+        
+        # Persist serialized state to database (SRS FR-3.6.3)
+        if DB_AVAILABLE:
+            self._persist_state(simulation_id, state, "paused")
+        
+        return state
     
     def resume_simulation(self, simulation_id: str) -> bool:
         """Resume a simulation"""
         if simulation_id not in self.simulations:
             raise ValueError(f"Simulation {simulation_id} not found")
         
-        return self.simulations[simulation_id].resume()
+        success = self.simulations[simulation_id].resume()
+        
+        # Update status in database
+        if DB_AVAILABLE and success:
+            self._update_status(simulation_id, "active")
+        
+        return success
     
     def stop_simulation(self, simulation_id: str) -> 'SerializedState':
         """Stop a simulation and serialize final state"""
@@ -453,8 +494,53 @@ class SimulationManager:
             raise ValueError(f"Simulation {simulation_id} not found")
         
         state = self.simulations[simulation_id].stop()
+        
+        # Persist final state and mark completed (SRS FR-3.6.3)
+        if DB_AVAILABLE:
+            self._persist_state(simulation_id, state, "completed")
+        
         del self.simulations[simulation_id]
         return state
+    
+    def _persist_state(self, simulation_id: str, state: 'SerializedState', status: str):
+        """Persist simulation state to database"""
+        try:
+            db = SessionLocal()
+            sim_record = db.query(SimulationModel).filter(
+                SimulationModel.patient_id == simulation_id
+            ).order_by(SimulationModel.created_at.desc()).first()
+            
+            if sim_record:
+                sim_record.engine_state = {
+                    "patient_id": state.patient_id,
+                    "timestamp": state.timestamp,
+                    "metrics": state.metrics,
+                    "engine_state": state.engine_state,
+                    "state_hash": state.state_hash,
+                    "serialization_format": state.serialization_format
+                }
+                sim_record.status = status
+                sim_record.updated_at = func.now()
+                db.commit()
+            db.close()
+        except Exception as e:
+            logger.warning(f"Failed to persist simulation state to DB: {e}")
+    
+    def _update_status(self, simulation_id: str, status: str):
+        """Update simulation status in database"""
+        try:
+            db = SessionLocal()
+            sim_record = db.query(SimulationModel).filter(
+                SimulationModel.patient_id == simulation_id
+            ).order_by(SimulationModel.created_at.desc()).first()
+            
+            if sim_record:
+                sim_record.status = status
+                sim_record.updated_at = func.now()
+                db.commit()
+            db.close()
+        except Exception as e:
+            logger.warning(f"Failed to update simulation status in DB: {e}")
     
     def get_simulation_count(self) -> int:
         """Get number of active simulations"""

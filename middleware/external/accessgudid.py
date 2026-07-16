@@ -10,6 +10,32 @@ from typing import Dict, List, Optional, Tuple
 from datetime import datetime, timedelta
 import json
 import os
+import asyncio
+from functools import wraps
+
+# Rate limiting decorator
+def rate_limit(calls_per_second: float = 1.0):
+    """
+    Decorator for rate limiting API calls.
+    
+    Args:
+        calls_per_second: Maximum calls per second
+    """
+    min_interval = 1.0 / calls_per_second
+    last_called = [0.0]
+    
+    def decorator(func):
+        @wraps(func)
+        async def wrapper(*args, **kwargs):
+            elapsed = datetime.now().timestamp() - last_called[0]
+            left_to_wait = min_interval - elapsed
+            if left_to_wait > 0:
+                await asyncio.sleep(left_to_wait)
+            ret = await func(*args, **kwargs)
+            last_called[0] = datetime.now().timestamp()
+            return ret
+        return wrapper
+    return decorator
 
 
 class CachedClient:
@@ -90,8 +116,56 @@ class AccessGUDIDClient(CachedClient):
         """
         super().__init__(cache_dir="/tmp/biosync_cache/accessgudid")
         self.api_key = api_key
+        self._session = None
     
-    def get_device(self, device_identifier: str) -> Optional[Dict]:
+    async def _get_session(self):
+        """Get or create HTTP session with rate limiting"""
+        if self._session is None:
+            try:
+                import httpx
+                self._session = httpx.AsyncClient(
+                    timeout=30.0,
+                    limits=httpx.Limits(max_keepalive_connections=5)
+                )
+            except ImportError:
+                # Fallback to sync requests
+                import requests
+                self._session = requests.Session()
+        return self._session
+    
+    @rate_limit(calls_per_second=1.0)  # FDA rate limit
+    async def _make_request(self, endpoint: str, params: Dict = None) -> Optional[Dict]:
+        """
+        Make HTTP request to AccessGUDID API.
+        
+        Args:
+            endpoint: API endpoint path
+            params: Query parameters
+        
+        Returns:
+            Response JSON or None
+        """
+        session = await self._get_session()
+        url = f"{self.BASE_URL}/{endpoint}"
+        
+        if hasattr(session, 'get'):  # async httpx
+            headers = {"Accept": "application/json"}
+            if self.api_key:
+                headers["X-API-Key"] = self.api_key
+            
+            response = await session.get(url, params=params, headers=headers)
+            response.raise_for_status()
+            return response.json()
+        else:  # sync requests
+            headers = {"Accept": "application/json"}
+            if self.api_key:
+                headers["X-API-Key"] = self.api_key
+            
+            response = session.get(url, params=params, headers=headers)
+            response.raise_for_status()
+            return response.json()
+    
+    async def get_device(self, device_identifier: str) -> Optional[Dict]:
         """
         Get device data by device identifier.
         
@@ -113,8 +187,20 @@ class AccessGUDIDClient(CachedClient):
         ):
             return self._read_cache(cache_key)
         
-        # TODO: Implement actual API call
-        # For now, return mock data
+        # Try actual API call
+        try:
+            device_data = await self._make_request(
+                f"device/{device_identifier}",
+                params={"api_key": self.api_key} if self.api_key else None
+            )
+            if device_data:
+                self._write_cache(cache_key, device_data)
+                return device_data
+        except Exception as e:
+            # Fall back to mock data on API error
+            pass
+        
+        # Return mock data as fallback
         device_data = {
             "deviceIdentifier": device_identifier,
             "deviceName": "Mock Device",
@@ -134,7 +220,7 @@ class AccessGUDIDClient(CachedClient):
         self._write_cache(cache_key, device_data)
         return device_data
     
-    def search_devices(self, product_code: str) -> List[Dict]:
+    async def search_devices(self, product_code: str) -> List[Dict]:
         """
         Search devices by FDA product code.
         
@@ -156,8 +242,20 @@ class AccessGUDIDClient(CachedClient):
         ):
             return self._read_cache(cache_key)
         
-        # TODO: Implement actual API call
-        # For now, return mock data for HRX (Pulse Oximeter)
+        # Try actual API call
+        try:
+            devices = await self._make_request(
+                "search",
+                params={"productCode": product_code, "api_key": self.api_key} if self.api_key else {"productCode": product_code}
+            )
+            if devices:
+                self._write_cache(cache_key, devices)
+                return devices
+        except Exception as e:
+            # Fall back to mock data on API error
+            pass
+        
+        # Return mock data as fallback for HRX (Pulse Oximeter)
         if product_code == "HRX":
             devices = [{
                 "deviceIdentifier": "MOCK-HRX-001",

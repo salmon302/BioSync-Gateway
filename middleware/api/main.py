@@ -3,14 +3,17 @@ BioSync-Gateway FastAPI Main Application
 Implements SRS §3.0 - Middleware Tier
 """
 
-from fastapi import FastAPI, Depends, HTTPException, status
+from fastapi import FastAPI, Depends, HTTPException, status, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
+from starlette.middleware.base import BaseHTTPMiddleware
 import logging
+import time
+from typing import Callable
 
 from api.auth import get_current_user, User
-from api.routes import health, audit, telemetry, plates, fhir, simulations
+from api.routes import health, audit, telemetry, plates, fhir, simulations, auth, admin
 from engine import init_engines
 
 # Configure logging
@@ -19,6 +22,33 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
+
+
+class PerformanceMiddleware(BaseHTTPMiddleware):
+    """
+    Middleware for performance instrumentation.
+    Tracks response time for all requests.
+    """
+    
+    async def dispatch(self, request: Request, call_next: Callable) -> Response:
+        start_time = time.perf_counter()
+        
+        response = await call_next(request)
+        
+        end_time = time.perf_counter()
+        response_time_ms = (end_time - start_time) * 1000
+        
+        # Add response time header
+        response.headers["X-Response-Time-ms"] = f"{response_time_ms:.2f}"
+        
+        # Log slow requests (>100ms)
+        if response_time_ms > 100:
+            logger.warning(
+                f"Slow request: {request.method} {request.url.path} "
+                f"took {response_time_ms:.2f}ms"
+            )
+        
+        return response
 
 
 @asynccontextmanager
@@ -92,6 +122,9 @@ app = FastAPI(
     lifespan=lifespan
 )
 
+# Add performance middleware for response time tracking
+app.add_middleware(PerformanceMiddleware)
+
 # Configure CORS
 app.add_middleware(
     CORSMiddleware,
@@ -113,6 +146,10 @@ app.include_router(telemetry.router, prefix="/api/telemetry", tags=["telemetry"]
 app.include_router(plates.router, prefix="/api/plates", tags=["plates"])
 app.include_router(fhir.router, prefix="/api/fhir", tags=["fhir"])
 app.include_router(simulations.router, prefix="/api/simulations", tags=["simulations"])
+app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
+app.include_router(admin.router, prefix="/api/admin", tags=["admin"])
+app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
+app.include_router(admin.router, prefix="/api/admin", tags=["admin"])
 
 
 @app.get("/")
