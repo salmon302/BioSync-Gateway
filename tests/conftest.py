@@ -112,7 +112,7 @@ def sample_jwt_token() -> str:
         "iat": int(time.time()),
         "exp": int(time.time()) + 3600  # 1 hour expiry
     }
-    return create_access_token(payload, expires_delta=3600)
+    return create_access_token(payload, expires_delta=1)
 
 
 @pytest.fixture
@@ -127,7 +127,7 @@ def admin_jwt_token() -> str:
         "iat": int(time.time()),
         "exp": int(time.time()) + 3600
     }
-    return create_access_token(payload, expires_delta=3600)
+    return create_access_token(payload, expires_delta=1)
 
 
 @pytest.fixture
@@ -141,7 +141,7 @@ def tech_jwt_token() -> str:
         "iat": int(time.time()),
         "exp": int(time.time()) + 3600
     }
-    return create_access_token(payload, expires_delta=3600)
+    return create_access_token(payload, expires_delta=1)
 
 
 @pytest.fixture
