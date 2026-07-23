@@ -72,5 +72,13 @@ junit.xml
 SNDEV/logs/*.log
 SNDEV/temp/
 
+# TLS private keys and certificates (generate via nginx/generate-certs.sh)
+nginx/ssl/*.key
+nginx/ssl/*.crt
+certs/*.key
+certs/*.crt
+certs/*.csr
+certs/*.srl
+
 # OS
 Thumbs.db
