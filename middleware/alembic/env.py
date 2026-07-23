@@ -13,6 +13,12 @@ from database import Base
 # This is the Alembic Config object
 config = context.config
 
+# Honor DATABASE_URL environment variable (NFR-M3: Alembic sole source of truth).
+# This allows docker-compose / CI to point Alembic at the correct database.
+database_url = os.getenv("DATABASE_URL")
+if database_url:
+    config.set_main_option("sqlalchemy.url", database_url)
+
 # Interpret the config file for Python logging
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)

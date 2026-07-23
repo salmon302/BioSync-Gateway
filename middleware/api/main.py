@@ -9,10 +9,12 @@ from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
 from starlette.middleware.base import BaseHTTPMiddleware
 import logging
+import os
 import time
 from typing import Callable
 
 from api.auth import get_current_user, User
+from api.middleware.response_time import ResponseTimeMiddleware, get_metrics
 from api.routes import health, audit, telemetry, plates, fhir, simulations, auth, admin
 from engine import init_engines
 
@@ -61,6 +63,29 @@ async def lifespan(app: FastAPI):
     
     # Startup
     logger.info("Starting BioSync-Gateway middleware...")
+
+    # Apply Alembic migrations at startup (NFR-M3: Alembic sole source of truth).
+    # This ensures the database schema is current even when the container is
+    # started outside of docker-compose (e.g. local dev, CI).
+    try:
+        from alembic.config import Config
+        from alembic import command
+        alembic_cfg = Config(os.path.join(os.path.dirname(__file__), "..", "alembic.ini"))
+        command.upgrade(alembic_cfg, "head")
+        logger.info("Alembic migrations applied successfully")
+    except Exception as e:
+        logger.error(f"Failed to apply Alembic migrations: {e}")
+        raise
+
+    # Warm up DB connection pool with backoff (NFR-R3)
+    try:
+        from database import warm_up_connection
+        if not warm_up_connection():
+            logger.error("Could not establish initial database connection after retries.")
+    except Exception as e:
+        logger.error(f"Database warm-up failed: {e}")
+        raise
+
     try:
         init_engines()
         logger.info("Algorithmic engines initialized")
@@ -124,6 +149,8 @@ app = FastAPI(
 
 # Add performance middleware for response time tracking
 app.add_middleware(PerformanceMiddleware)
+# Add enhanced response-time middleware with metrics collection (SRS NFR-P3)
+app.add_middleware(ResponseTimeMiddleware)
 
 # Configure CORS
 app.add_middleware(
@@ -146,8 +173,6 @@ app.include_router(telemetry.router, prefix="/api/telemetry", tags=["telemetry"]
 app.include_router(plates.router, prefix="/api/plates", tags=["plates"])
 app.include_router(fhir.router, prefix="/api/fhir", tags=["fhir"])
 app.include_router(simulations.router, prefix="/api/simulations", tags=["simulations"])
-app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
-app.include_router(admin.router, prefix="/api/admin", tags=["admin"])
 app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
 app.include_router(admin.router, prefix="/api/admin", tags=["admin"])
 
@@ -173,6 +198,22 @@ async def protected_endpoint(current_user: User = Depends(get_current_user)):
         "role": current_user.role,
         "scopes": current_user.scopes
     }
+
+
+@app.get("/api/metrics")
+async def metrics_endpoint():
+    """
+    Performance metrics endpoint.
+    Implements SRS NFR-P1–P6 — exposes collected performance instrumentation data.
+
+    Returns JSON with:
+    - HTTP endpoint latency (P50/P95/P99, avg, min, max per route)
+    - WebSocket relay latency and active connection count
+    - Telemetry ingestion throughput (NFR-P1)
+    - Pulse Engine step latency (NFR-P5)
+    - Hash chain verification timing (NFR-P4)
+    """
+    return get_metrics().snapshot()
 
 
 # Global exception handler

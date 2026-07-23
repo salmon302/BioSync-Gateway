@@ -14,7 +14,6 @@ services:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./database/migrations:/docker-entrypoint-initdb.d
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U biosync_user -d biosync"]
       interval: 10s
@@ -52,16 +51,22 @@ services:
       - DB_SSLROOTCERT=/etc/ssl/certs/ca.crt
       - DB_SSLCERT=/etc/ssl/certs/client.crt
       - DB_SSLKEY=/etc/ssl/certs/client.key
+      # External data integration (SRS §3.10 / P1-7)
+      - CLINVAR_API_KEY=${CLINVAR_API_KEY:-}
+      - OPENFDA_API_KEY=${OPENFDA_API_KEY:-}
+      - ACCESSGUDID_API_KEY=${ACCESSGUDID_API_KEY:-}
+      - BIOSYNC_CACHE_DIR=/app/cache
     ports:
       - "8000:8000"
     volumes:
       - ./middleware:/app
       - ./database:/app/database
       - ./certs:/etc/ssl/certs:ro
+      - biosync_cache:/app/cache
     depends_on:
       db:
         condition: service_healthy
-    command: uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload
+    command: alembic upgrade head && uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload
     networks:
       - biosync-network
 
@@ -103,3 +108,4 @@ networks:
 
 volumes:
   postgres_data:
+  biosync_cache:
