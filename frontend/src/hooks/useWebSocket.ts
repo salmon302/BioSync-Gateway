@@ -33,6 +33,8 @@ export const useWebSocket = (url: string, token?: string): UseWebSocketReturn =>
   const wsRef = useRef<WebSocket | null>(null)
   const reconnectAttempts = useRef(0)
   const maxReconnectAttempts = 5
+  // Queue for messages sent while disconnected (SRS NFR-R4: message replay)
+  const pendingMessages = useRef<any[]>([])
 
   const connect = useCallback(() => {
     try {
@@ -44,6 +46,14 @@ export const useWebSocket = (url: string, token?: string): UseWebSocketReturn =>
         console.log('WebSocket connected')
         setIsConnected(true)
         reconnectAttempts.current = 0
+
+        // Flush queued messages (SRS NFR-R4: replay for missed data points)
+        while (pendingMessages.current.length > 0) {
+          const msg = pendingMessages.current.shift()
+          if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+            wsRef.current.send(JSON.stringify(msg))
+          }
+        }
       }
 
       wsRef.current.onmessage = (event) => {
@@ -96,6 +106,9 @@ export const useWebSocket = (url: string, token?: string): UseWebSocketReturn =>
   const sendMessage = useCallback((message: any) => {
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify(message))
+    } else {
+      // Queue message for replay on reconnect (SRS NFR-R4)
+      pendingMessages.current.push(message)
     }
   }, [])
 

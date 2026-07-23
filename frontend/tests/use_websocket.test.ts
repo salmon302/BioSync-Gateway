@@ -149,4 +149,25 @@ describe('useWebSocket', () => {
 
     expect(wsInstances.length).toBe(2)
   })
+
+  it('queues messages sent while disconnected and flushes on reconnect (NFR-R4)', () => {
+    const { result } = renderHook(() => useWebSocket('ws://localhost:8000/ws'))
+
+    // Connection not yet open — sendMessage should queue
+    act(() => {
+      result.current.sendMessage({ type: 'subscribe', channels: ['pressure'] })
+    })
+
+    // Open the connection — queued messages should be flushed
+    const sendSpy = vi.fn()
+    wsInstances[0].send = sendSpy
+    act(() => {
+      wsInstances[0].readyState = MockWebSocket.OPEN
+      wsInstances[0].onopen?.({} as any)
+    })
+
+    expect(sendSpy).toHaveBeenCalledWith(
+      JSON.stringify({ type: 'subscribe', channels: ['pressure'] })
+    )
+  })
 })
