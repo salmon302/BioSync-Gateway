@@ -1,440 +1,327 @@
+# SPDX-License-Identifier: MIT
 """
-External Data Clients
-Implements SRS §3.10 - External Data Integration
+FDA Device Data Client
+Implements SRS §3.10.1 - AccessGUDID Device Integration
 
-This module provides clients for FDA AccessGUDID and NCBI ClinVar APIs
-with local caching for offline operation.
+Real external API integration (P1-7):
+    - get_device(di):  FDA AccessGUDID Device Lookup API (canonical device record)
+    - search_devices(product_code):  openFDA Device UDI API (parametric search)
+
+Why two upstreams?
+    AccessGUDID exposes a *lookup-by-identifier* JSON API only - it has no
+    public parametric/product-code search endpoint. The openFDA Device UDI
+    database (also an FDA service) mirrors the same GUDID data and supports
+    ``search=product_codes.code:HRX`` queries required by FR-3.10.1
+    (Product Code HRX = Arthroscopes and Accessories). We therefore use
+    openFDA for discovery and AccessGUDID for canonical per-device detail.
+
+Caching (FR-3.10.3): 24-hour TTL for device data, with stale-cache fallback on
+upstream failure. There are no mock-data fallbacks.
 """
 
-from typing import Dict, List, Optional, Tuple
-from datetime import datetime, timedelta
-import json
-import os
+from __future__ import annotations
+
 import asyncio
-from functools import wraps
+import logging
+import os
+from typing import Dict, List, Optional
 
-# Rate limiting decorator
-def rate_limit(calls_per_second: float = 1.0):
-    """
-    Decorator for rate limiting API calls.
-    
-    Args:
-        calls_per_second: Maximum calls per second
-    """
-    min_interval = 1.0 / calls_per_second
-    last_called = [0.0]
-    
-    def decorator(func):
-        @wraps(func)
-        async def wrapper(*args, **kwargs):
-            elapsed = datetime.now().timestamp() - last_called[0]
-            left_to_wait = min_interval - elapsed
-            if left_to_wait > 0:
-                await asyncio.sleep(left_to_wait)
-            ret = await func(*args, **kwargs)
-            last_called[0] = datetime.now().timestamp()
-            return ret
-        return wrapper
-    return decorator
+from external.base import CachedClient, ExternalAPIError, default_cache_root
 
-
-class CachedClient:
-    """
-    Base class for API clients with local caching.
-    
-    Implements:
-        SRS FR-3.10.3 - Cache TTL (24h devices, 7d variants)
-    """
-    
-    def __init__(self, cache_dir: str = "/tmp/biosync_cache"):
-        """
-        Initialize cached client.
-        
-        Args:
-            cache_dir: Directory for cache files
-        """
-        self.cache_dir = cache_dir
-        os.makedirs(cache_dir, exist_ok=True)
-    
-    def _get_cache_path(self, key: str) -> str:
-        """Get cache file path for a key"""
-        return os.path.join(self.cache_dir, f"{key}.json")
-    
-    def _is_cache_valid(self, cache_path: str, ttl_hours: int) -> bool:
-        """
-        Check if cache file is still valid.
-        
-        Args:
-            cache_path: Path to cache file
-            ttl_hours: Cache TTL in hours
-        
-        Returns:
-            True if cache is valid
-        """
-        if not os.path.exists(cache_path):
-            return False
-        
-        # Check file age
-        mtime = os.path.getmtime(cache_path)
-        age_hours = (datetime.now().timestamp() - mtime) / 3600
-        
-        return age_hours < ttl_hours
-    
-    def _read_cache(self, key: str) -> Optional[Dict]:
-        """Read from cache"""
-        cache_path = self._get_cache_path(key)
-        if os.path.exists(cache_path):
-            with open(cache_path, 'r') as f:
-                return json.load(f)
-        return None
-    
-    def _write_cache(self, key: str, data: Dict):
-        """Write to cache"""
-        cache_path = self._get_cache_path(key)
-        with open(cache_path, 'w') as f:
-            json.dump(data, f)
+logger = logging.getLogger(__name__)
 
 
 class AccessGUDIDClient(CachedClient):
     """
-    FDA AccessGUDID API client for device data.
-    
+    FDA device metadata client.
+
     Implements:
-        SRS FR-3.10.1 - AccessGUDID integration
+        SRS FR-3.10.1 - AccessGUDID device lookup / product-code search
         SRS FR-3.10.3 - 24-hour cache TTL
     """
-    
-    BASE_URL = "https://accessgudid.nlm.nih.gov/api"
+
+    # AccessGUDID canonical lookup (by device identifier).
+    ACCESSGUDID_LOOKUP_URL = "https://accessgudid.nlm.nih.gov/api/v3/devices/lookup.json"
+    # openFDA UDI parametric search (by product code, etc.).
+    OPENFDA_UDI_URL = "https://api.fda.gov/device/udi.json"
+
     CACHE_TTL_HOURS = 24
-    
-    def __init__(self, api_key: Optional[str] = None):
+    # AccessGUDID has no published hard limit; openFDA allows 240/min without a
+    # key. 2 req/s is a safe sustained rate for both.
+    CALLS_PER_SECOND = 2.0
+
+    def __init__(
+        self,
+        api_key: Optional[str] = None,
+        openfda_api_key: Optional[str] = None,
+        cache_dir: Optional[str] = None,
+    ):
         """
-        Initialize AccessGUDID client.
-        
         Args:
-            api_key: FDA API key (optional, public access has limits)
+            api_key: Reserved for AccessGUDID (public API needs none today).
+            openfda_api_key: openFDA API key (raises daily quota; optional).
+            cache_dir: Override cache directory (defaults to shared cache root).
         """
-        super().__init__(cache_dir="/tmp/biosync_cache/accessgudid")
-        self.api_key = api_key
-        self._session = None
-    
-    async def _get_session(self):
-        """Get or create HTTP session with rate limiting"""
-        if self._session is None:
-            try:
-                import httpx
-                self._session = httpx.AsyncClient(
-                    timeout=30.0,
-                    limits=httpx.Limits(max_keepalive_connections=5)
-                )
-            except ImportError:
-                # Fallback to sync requests
-                import requests
-                self._session = requests.Session()
-        return self._session
-    
-    @rate_limit(calls_per_second=1.0)  # FDA rate limit
-    async def _make_request(self, endpoint: str, params: Dict = None) -> Optional[Dict]:
-        """
-        Make HTTP request to AccessGUDID API.
-        
-        Args:
-            endpoint: API endpoint path
-            params: Query parameters
-        
-        Returns:
-            Response JSON or None
-        """
-        session = await self._get_session()
-        url = f"{self.BASE_URL}/{endpoint}"
-        
-        if hasattr(session, 'get'):  # async httpx
-            headers = {"Accept": "application/json"}
-            if self.api_key:
-                headers["X-API-Key"] = self.api_key
-            
-            response = await session.get(url, params=params, headers=headers)
-            response.raise_for_status()
-            return response.json()
-        else:  # sync requests
-            headers = {"Accept": "application/json"}
-            if self.api_key:
-                headers["X-API-Key"] = self.api_key
-            
-            response = session.get(url, params=params, headers=headers)
-            response.raise_for_status()
-            return response.json()
-    
+        super().__init__(
+            cache_dir=cache_dir or os.path.join(default_cache_root(), "accessgudid"),
+        )
+        self.api_key = api_key or os.getenv("ACCESSGUDID_API_KEY") or None
+        self.openfda_api_key = openfda_api_key or os.getenv("OPENFDA_API_KEY") or None
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
     async def get_device(self, device_identifier: str) -> Optional[Dict]:
         """
-        Get device data by device identifier.
-        
+        Retrieve a canonical device record by Device Identifier (DI).
+
         Args:
-            device_identifier: GUDID device identifier
-        
+            device_identifier: GUDID primary device identifier (DI).
+
         Returns:
-            Device data dict or None if not found
-            
+            Normalised device dict, or ``None`` if the DI is unknown.
+
+        Raises:
+            ExternalAPIError: on upstream failure with no cached copy.
+
         Implements:
             SRS FR-3.10.1 - Device lookup
         """
         cache_key = f"device_{device_identifier}"
-        
-        # Check cache first
-        if self._is_cache_valid(
-            self._get_cache_path(cache_key),
-            self.CACHE_TTL_HOURS
-        ):
-            return self._read_cache(cache_key)
-        
-        # Try actual API call
-        try:
-            device_data = await self._make_request(
-                f"device/{device_identifier}",
-                params={"api_key": self.api_key} if self.api_key else None
+
+        async def fetch():
+            raw = await self._get_json(
+                self.ACCESSGUDID_LOOKUP_URL, params={"di": device_identifier}
             )
-            if device_data:
-                self._write_cache(cache_key, device_data)
-                return device_data
-        except Exception as e:
-            # Fall back to mock data on API error
-            pass
-        
-        # Return mock data as fallback
-        device_data = {
-            "deviceIdentifier": device_identifier,
-            "deviceName": "Mock Device",
-            "manufacturer": "Mock Manufacturer",
-            "modelNumber": "MOCK-001",
-            "deviceType": "Therapeutic",
-            "fhirResource": {
-                "resourceType": "Device",
-                "identifier": [{
-                    "system": "http://accessgudid.com",
-                    "value": device_identifier
-                }]
-            }
-        }
-        
-        # Cache result
-        self._write_cache(cache_key, device_data)
-        return device_data
-    
-    async def search_devices(self, product_code: str) -> List[Dict]:
+            if raw is None:
+                return None
+            return self._normalize_accessgudid(raw)
+
+        return await self._cached_fetch(cache_key, self.CACHE_TTL_HOURS, fetch)
+
+    async def search_devices(
+        self, product_code: str, limit: int = 20
+    ) -> List[Dict]:
         """
-        Search devices by FDA product code.
-        
+        Search devices by FDA product code via openFDA.
+
         Args:
-            product_code: FDA product code (e.g., "HRX")
-        
+            product_code: FDA product code (e.g. "HRX" for arthroscopes).
+            limit: Maximum records to return (openFDA max 1000).
+
         Returns:
-            List of device data dicts
-            
+            List of normalised device dicts (possibly empty).
+
+        Raises:
+            ExternalAPIError: on upstream failure with no cached copy.
+
         Implements:
             SRS FR-3.10.1 - Device search by product code
         """
-        cache_key = f"product_code_{product_code}"
-        
-        # Check cache first
-        if self._is_cache_valid(
-            self._get_cache_path(cache_key),
-            self.CACHE_TTL_HOURS
-        ):
-            return self._read_cache(cache_key)
-        
-        # Try actual API call
-        try:
-            devices = await self._make_request(
-                "search",
-                params={"productCode": product_code, "api_key": self.api_key} if self.api_key else {"productCode": product_code}
-            )
-            if devices:
-                self._write_cache(cache_key, devices)
-                return devices
-        except Exception as e:
-            # Fall back to mock data on API error
-            pass
-        
-        # Return mock data as fallback for HRX (Pulse Oximeter)
-        if product_code == "HRX":
-            devices = [{
-                "deviceIdentifier": "MOCK-HRX-001",
-                "deviceName": "Pulse Oximeter",
-                "manufacturer": "Mock Medical Devices",
-                "modelNumber": "PO-2000",
-                "deviceType": "Therapeutic",
-                "productCode": "HRX",
-                "fhirResource": {
-                    "resourceType": "Device",
-                    "identifier": [{
-                        "system": "http://accessgudid.com",
-                        "value": "MOCK-HRX-001"
-                    }],
-                    "type": {
-                        "coding": [{
-                            "system": "http://terminology.hl7.org/CodeSystem/device-type",
-                            "code": "pulse-oximeter",
-                            "display": "Pulse Oximeter"
-                        }]
-                    }
-                }
-            }]
-        else:
-            devices = []
-        
-        # Cache result
-        self._write_cache(cache_key, devices)
-        return devices
+        cache_key = f"product_code_{product_code}_{limit}"
 
+        async def fetch():
+            params = {
+                "search": f"product_codes.code:{product_code}",
+                "limit": max(1, min(limit, 1000)),
+            }
+            if self.openfda_api_key:
+                params["api_key"] = self.openfda_api_key
+            raw = await self._get_json(self.OPENFDA_UDI_URL, params=params)
+            # openFDA returns 404 when zero records match the query.
+            if raw is None:
+                return []
+            results = raw.get("results", [])
+            return [self._normalize_openfda(r) for r in results]
 
-class ClinVarClient(CachedClient):
-    """
-    NCBI ClinVar API client for genetic variant data.
-    
-    Implements:
-        SRS FR-3.10.2 - ClinVar integration
-        SRS FR-3.10.3 - 7-day cache TTL
-    """
-    
-    BASE_URL = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
-    CACHE_TTL_HOURS = 168  # 7 days
-    
-    def __init__(self, api_key: Optional[str] = None):
-        """
-        Initialize ClinVar client.
-        
-        Args:
-            api_key: NCBI API key (optional, increases rate limits)
-        """
-        super().__init__(cache_dir="/tmp/biosync_cache/clinvar")
-        self.api_key = api_key
-    
-    def get_variant(self, variant_id: str) -> Optional[Dict]:
-        """
-        Get variant data by ClinVar ID.
-        
-        Args:
-            variant_id: ClinVar variation ID
-        
-        Returns:
-            Variant data dict or None if not found
-            
-        Implements:
-            SRS FR-3.10.2 - Variant lookup
-        """
-        cache_key = f"variant_{variant_id}"
-        
-        # Check cache first
-        if self._is_cache_valid(
-            self._get_cache_path(cache_key),
-            self.CACHE_TTL_HOURS
-        ):
-            return self._read_cache(cache_key)
-        
-        # TODO: Implement actual API call
-        # For now, return mock data
-        variant_data = {
-            "clinvarId": variant_id,
-            "variantName": "Mock Variant",
-            "clinicalSignificance": "Benign",
-            "reviewStatus": "criteria provided, single submitter",
-            "lastEvaluated": datetime.now().isoformat()
+        return await self._cached_fetch(
+            cache_key, self.CACHE_TTL_HOURS, fetch, empty=[]
+        )
+
+    # ------------------------------------------------------------------
+    # Normalisation helpers
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _primary_di(identifiers: List[Dict]) -> Optional[str]:
+        """Pick the primary device identifier from an identifier list."""
+        for ident in identifiers or []:
+            if ident.get("deviceIdType") == "Primary" or ident.get("type") == "Primary":
+                return ident.get("deviceId") or ident.get("id")
+        if identifiers:
+            first = identifiers[0]
+            return first.get("deviceId") or first.get("id")
+        return None
+
+    def _normalize_accessgudid(self, raw: Dict) -> Dict:
+        """Transform an AccessGUDID lookup payload into our device shape."""
+        device = (raw.get("gudid") or {}).get("device") or {}
+        identifiers = (device.get("identifiers") or {}).get("identifier") or []
+        di = self._primary_di(identifiers)
+
+        product_codes = [
+            {
+                "productCode": pc.get("productCode"),
+                "productCodeName": pc.get("productCodeName"),
+            }
+            for pc in (device.get("productCodes") or {}).get("fdaProductCode") or []
+        ]
+
+        return {
+            "deviceIdentifier": di,
+            "deviceName": device.get("brandName"),
+            "manufacturer": device.get("companyName"),
+            "modelNumber": device.get("versionModelNumber")
+            or device.get("catalogNumber"),
+            "deviceDescription": device.get("deviceDescription"),
+            "productCodes": product_codes,
+            "source": "accessgudid",
+            "recordKey": device.get("publicDeviceRecordKey"),
+            "fhirResource": self._to_fhir_device(
+                di,
+                device.get("brandName"),
+                device.get("companyName"),
+                device.get("versionModelNumber"),
+                product_codes,
+            ),
         }
-        
-        # Cache result
-        self._write_cache(cache_key, variant_data)
-        return variant_data
-    
-    def search_variants(self, gene: str, significance: str = None) -> List[Dict]:
-        """
-        Search variants by gene and clinical significance.
-        
-        Args:
-            gene: Gene symbol (e.g., "BRCA1")
-            significance: Clinical significance filter (optional)
-        
-        Returns:
-            List of variant data dicts
-            
-        Implements:
-            SRS FR-3.10.2 - Variant search
-        """
-        cache_key = f"gene_{gene}_{significance or 'all'}"
-        
-        # Check cache first
-        if self._is_cache_valid(
-            self._get_cache_path(cache_key),
-            self.CACHE_TTL_HOURS
-        ):
-            return self._read_cache(cache_key)
-        
-        # TODO: Implement actual API call
-        # For now, return mock data
-        variants = [{
-            "clinvarId": "MOCK-001",
-            "variantName": f"{gene} mock variant",
-            "clinicalSignificance": significance or "Benign",
-            "gene": gene
-        }]
-        
-        # Cache result
-        self._write_cache(cache_key, variants)
-        return variants
+
+    def _normalize_openfda(self, raw: Dict) -> Dict:
+        """Transform an openFDA UDI record into our device shape."""
+        identifiers = raw.get("identifiers") or []
+        di = self._primary_di(identifiers)
+
+        product_codes = [
+            {
+                "productCode": pc.get("code"),
+                "productCodeName": pc.get("name"),
+            }
+            for pc in raw.get("product_codes") or []
+        ]
+
+        return {
+            "deviceIdentifier": di,
+            "deviceName": raw.get("brand_name"),
+            "manufacturer": raw.get("company_name"),
+            "modelNumber": raw.get("version_or_model_number")
+            or raw.get("catalog_number"),
+            "deviceDescription": raw.get("device_description"),
+            "productCodes": product_codes,
+            "source": "openfda",
+            "recordKey": raw.get("public_device_record_key"),
+            "fhirResource": self._to_fhir_device(
+                di,
+                raw.get("brand_name"),
+                raw.get("company_name"),
+                raw.get("version_or_model_number"),
+                product_codes,
+            ),
+        }
+
+    @staticmethod
+    def _to_fhir_device(
+        di: Optional[str],
+        brand_name: Optional[str],
+        manufacturer: Optional[str],
+        model_number: Optional[str],
+        product_codes: List[Dict],
+    ) -> Dict:
+        """Build a minimal FHIR Device resource (SRS §3.7 alignment)."""
+        resource: Dict = {
+            "resourceType": "Device",
+            "identifier": [
+                {
+                    "system": "http://hl7.org/fhir/NamingSystem/gs1-di",
+                    "value": di,
+                }
+            ]
+            if di
+            else [],
+        }
+        if manufacturer:
+            resource["manufacturer"] = manufacturer
+        if model_number:
+            resource["modelNumber"] = model_number
+        if brand_name:
+            resource["deviceName"] = [
+                {"name": brand_name, "type": "user-friendly-name"}
+            ]
+        if product_codes:
+            resource["type"] = {
+                "coding": [
+                    {
+                        "system": "https://www.accessdata.fda.gov/scripts/cdrh/cfdocs/cfPCD/classification.cfm",
+                        "code": pc["productCode"],
+                        "display": pc.get("productCodeName"),
+                    }
+                    for pc in product_codes
+                    if pc.get("productCode")
+                ]
+            }
+        return resource
 
 
-def seed_devices_from_accessgudid(product_code: str = "HRX") -> List[Dict]:
+async def seed_devices_from_accessgudid(
+    product_code: str = "HRX", limit: int = 20
+) -> List[Dict]:
     """
-    Seed devices table from AccessGUDID.
-    
+    Seed the device registry from FDA data for a product code.
+
     Args:
-        product_code: FDA product code to seed
-    
+        product_code: FDA product code to seed (default HRX = arthroscopes).
+        limit: Maximum number of devices to fetch.
+
     Returns:
-        List of seeded device records
-        
+        List of DB-shaped device records.
+
     Implements:
         SRS FR-3.10.1 - Device registry seeding
     """
     client = AccessGUDIDClient()
-    devices = client.search_devices(product_code)
-    
-    # Transform to database format
+    try:
+        devices = await client.search_devices(product_code, limit=limit)
+    finally:
+        await client.aclose()
+
     db_devices = []
     for device in devices:
-        db_device = {
-            "device_identifier": device["deviceIdentifier"],
-            "device_name": device["deviceName"],
-            "manufacturer": device.get("manufacturer"),
-            "model_number": device.get("modelNumber"),
-            "device_type": device.get("deviceType"),
-            "fhir_resource": device.get("fhirResource")
-        }
-        db_devices.append(db_device)
-    
+        db_devices.append(
+            {
+                "device_identifier": device.get("deviceIdentifier"),
+                "device_name": device.get("deviceName"),
+                "manufacturer": device.get("manufacturer"),
+                "model_number": device.get("modelNumber"),
+                "device_type": (device.get("productCodes") or [{}])[0].get(
+                    "productCodeName"
+                ),
+                "fhir_resource": device.get("fhirResource"),
+            }
+        )
     return db_devices
 
 
 if __name__ == "__main__":
-    # Self-test
-    print("Testing External Data Clients...")
-    
-    # Test AccessGUDID client
-    print("\n1. AccessGUDID Client:")
-    ag_client = AccessGUDIDClient()
-    devices = ag_client.search_devices("HRX")
-    print(f"   Found {len(devices)} devices for product code 'HRX'")
-    if devices:
-        print(f"   First device: {devices[0]['deviceName']}")
-    
-    # Test ClinVar client
-    print("\n2. ClinVar Client:")
-    cv_client = ClinVarClient()
-    variants = cv_client.search_variants("BRCA1")
-    print(f"   Found {len(variants)} variants for gene 'BRCA1'")
-    if variants:
-        print(f"   First variant: {variants[0]['variantName']}")
-    
-    # Test device seeding
-    print("\n3. Seed Devices:")
-    seeded = seed_devices_from_accessgudid("HRX")
-    print(f"   Seeded {len(seeded)} devices")
+    # Live self-test (requires network access).
+    logging.basicConfig(level=logging.INFO)
+    print("Testing AccessGUDID / openFDA client (live)...")
+
+    async def _main():
+        client = AccessGUDIDClient()
+        try:
+            print("\n1. Search devices by product code HRX (openFDA):")
+            devices = await client.search_devices("HRX", limit=3)
+            print(f"   Found {len(devices)} devices")
+            for d in devices:
+                print(f"   - {d['deviceName']} ({d['deviceIdentifier']}) "
+                      f"by {d['manufacturer']}")
+
+            print("\n2. Lookup device by DI (AccessGUDID):")
+            device = await client.get_device("00844588018923")
+            if device:
+                print(f"   {device['deviceName']} - {device['manufacturer']}")
+                print(f"   Product codes: {device['productCodes']}")
+            else:
+                print("   Not found")
+        finally:
+            await client.aclose()
+
+    asyncio.run(_main())

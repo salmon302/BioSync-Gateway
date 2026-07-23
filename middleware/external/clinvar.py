@@ -1,338 +1,282 @@
+# SPDX-License-Identifier: MIT
 """
-ClinVar API Client
+NCBI ClinVar API Client
 Implements SRS §3.10.2 - NCBI ClinVar Integration
 
-This module provides a client for the NCBI ClinVar API with local caching.
+Real external API integration (P1-7) via NCBI E-utilities:
+    - search_variants(gene):        esearch -> esummary
+    - get_variant(variant_id):      esummary
+    - get_variant_by_coordinates(): esearch -> esummary
+
+Caching (FR-3.10.3): 7-day TTL for variant data, with stale-cache fallback on
+upstream failure. There are no mock-data fallbacks.
+
+Rate limiting (SRS §4.3): NCBI permits 3 requests/second without an API key and
+10/second with one. The client rate-limits accordingly.
 """
 
-from typing import Dict, List, Optional
-from datetime import datetime, timedelta
-import json
-import os
+from __future__ import annotations
+
 import asyncio
-from functools import wraps
+import logging
+import os
+from typing import Dict, List, Optional
 
-# Rate limiting decorator
-def rate_limit(calls_per_second: float = 3.0):
-    """
-    Decorator for rate limiting API calls.
-    
-    Args:
-        calls_per_second: Maximum calls per second (NCBI allows 3/sec with key, 1/sec without)
-    """
-    min_interval = 1.0 / calls_per_second
-    last_called = [0.0]
-    
-    def decorator(func):
-        @wraps(func)
-        async def wrapper(*args, **kwargs):
-            elapsed = datetime.now().timestamp() - last_called[0]
-            left_to_wait = min_interval - elapsed
-            if left_to_wait > 0:
-                await asyncio.sleep(left_to_wait)
-            ret = await func(*args, **kwargs)
-            last_called[0] = datetime.now().timestamp()
-            return ret
-        return wrapper
-    return decorator
+from external.base import CachedClient, ExternalAPIError, default_cache_root
+
+logger = logging.getLogger(__name__)
 
 
-class ClinVarClient:
+class ClinVarClient(CachedClient):
     """
-    NCBI ClinVar API client for genetic variant data.
-    
+    NCBI ClinVar variant data client.
+
     Implements:
-        SRS FR-3.10.2 - ClinVar integration
+        SRS FR-3.10.2 - ClinVar variant lookup / search
         SRS FR-3.10.3 - 7-day cache TTL
     """
-    
+
     BASE_URL = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
     CACHE_TTL_HOURS = 168  # 7 days
-    
-    def __init__(self, api_key: Optional[str] = None, cache_dir: str = "/tmp/biosync_cache/clinvar"):
+    # NCBI: 3/s without key, 10/s with key.
+    CALLS_PER_SECOND = 3.0
+
+    def __init__(
+        self,
+        api_key: Optional[str] = None,
+        cache_dir: Optional[str] = None,
+    ):
         """
-        Initialize ClinVar client.
-        
         Args:
-            api_key: NCBI API key (optional, increases rate limits)
-            cache_dir: Directory for cache files
+            api_key: NCBI API key (optional; raises rate limit to 10/s).
+            cache_dir: Override cache directory (defaults to shared cache root).
         """
-        self.api_key = api_key
-        self.cache_dir = cache_dir
-        os.makedirs(cache_dir, exist_ok=True)
-        self._session = None
-    
-    def _get_cache_path(self, key: str) -> str:
-        """Get cache file path for a key"""
-        return os.path.join(self.cache_dir, f"{key}.json")
-    
-    def _is_cache_valid(self, cache_path: str) -> bool:
-        """
-        Check if cache file is still valid.
-        
-        Args:
-            cache_path: Path to cache file
-        
-        Returns:
-            True if cache is valid (less than 7 days old)
-        """
-        if not os.path.exists(cache_path):
-            return False
-        
-        # Check file age
-        mtime = os.path.getmtime(cache_path)
-        age_hours = (datetime.now().timestamp() - mtime) / 3600
-        
-        return age_hours < self.CACHE_TTL_HOURS
-    
-    def _read_cache(self, key: str) -> Optional[Dict]:
-        """Read from cache"""
-        cache_path = self._get_cache_path(key)
-        if os.path.exists(cache_path):
-            with open(cache_path, 'r') as f:
-                return json.load(f)
-        return None
-    
-    def _write_cache(self, key: str, data: Dict):
-        """Write to cache"""
-        cache_path = self._get_cache_path(key)
-        with open(cache_path, 'w') as f:
-            json.dump(data, f)
-    
-    async def _get_session(self):
-        """Get or create HTTP session"""
-        if self._session is None:
-            try:
-                import httpx
-                self._session = httpx.AsyncClient(
-                    timeout=30.0,
-                    limits=httpx.Limits(max_keepalive_connections=5)
-                )
-            except ImportError:
-                import requests
-                self._session = requests.Session()
-        return self._session
-    
-    @rate_limit(calls_per_second=3.0)  # NCBI allows 3/sec with API key
-    async def _make_request(self, endpoint: str, params: Dict = None) -> Optional[Dict]:
-        """
-        Make HTTP request to NCBI E-utilities API.
-        
-        Args:
-            endpoint: API endpoint path
-            params: Query parameters
-        
-        Returns:
-            Response JSON or None
-        """
-        session = await self._get_session()
-        url = f"{self.BASE_URL}/{endpoint}"
-        
-        if hasattr(session, 'get'):  # async httpx
-            headers = {"Accept": "application/json"}
-            if self.api_key:
-                params = params or {}
-                params["api_key"] = self.api_key
-            
-            response = await session.get(url, params=params, headers=headers)
-            response.raise_for_status()
-            return response.json()
-        else:  # sync requests
-            headers = {"Accept": "application/json"}
-            if self.api_key:
-                params = params or {}
-                params["api_key"] = self.api_key
-            
-            response = session.get(url, params=params, headers=headers)
-            response.raise_for_status()
-            return response.json()
-    
+        self.api_key = api_key or os.getenv("CLINVAR_API_KEY") or None
+        super().__init__(
+            cache_dir=cache_dir or os.path.join(default_cache_root(), "clinvar"),
+            calls_per_second=10.0 if self.api_key else 3.0,
+        )
+
+    def _eutils_params(self, extra: Dict) -> Dict:
+        """Merge common E-utilities params (db, tool, email, api_key)."""
+        params = {
+            "db": "clinvar",
+            "retmode": "json",
+            "tool": "biosync-gateway",
+        }
+        params.update(extra)
+        if self.api_key:
+            params["api_key"] = self.api_key
+        return params
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+    async def _esearch(self, term: str, retmax: int = 20) -> List[str]:
+        """Run esearch and return the list of matching ClinVar UIDs."""
+        result = await self._get_json(
+            f"{self.BASE_URL}/esearch.fcgi",
+            params=self._eutils_params({"term": term, "retmax": retmax}),
+        )
+        if not result:
+            return []
+        return (result.get("esearchresult") or {}).get("idlist", [])
+
+    async def _esummary(self, uids: List[str]) -> List[Dict]:
+        """Run esummary for UIDs and return normalised variant dicts."""
+        if not uids:
+            return []
+        result = await self._get_json(
+            f"{self.BASE_URL}/esummary.fcgi",
+            params=self._eutils_params({"id": ",".join(uids)}),
+        )
+        if not result:
+            return []
+        docs = result.get("result") or {}
+        variants = []
+        for uid in docs.get("uids", []):
+            doc = docs.get(uid)
+            if doc:
+                variants.append(self._normalize_variant(doc))
+        return variants
+
     async def get_variant(self, variant_id: str) -> Optional[Dict]:
         """
-        Get variant data by ClinVar ID.
-        
+        Retrieve a single variant summary by ClinVar UID.
+
         Args:
-            variant_id: ClinVar variation ID
-        
+            variant_id: ClinVar variation UID.
+
         Returns:
-            Variant data dict or None if not found
-            
+            Normalised variant dict, or ``None`` if not found.
+
+        Raises:
+            ExternalAPIError: on upstream failure with no cached copy.
+
         Implements:
             SRS FR-3.10.2 - Variant lookup
         """
         cache_key = f"variant_{variant_id}"
-        
-        # Check cache first
-        if self._is_cache_valid(self._get_cache_path(cache_key)):
-            return self._read_cache(cache_key)
-        
-        # Try actual API call
-        try:
-            params = {"db": "clinvar", "id": variant_id, "retmode": "json"}
-            if self.api_key:
-                params["api_key"] = self.api_key
-            
-            result = await self._make_request("efetch.fcgi", params)
-            if result and "esearchsummary" in result:
-                self._write_cache(cache_key, result)
-                return result
-        except Exception as e:
-            # Fall back to mock data on API error
-            pass
-        
-        # Return mock data as fallback
-        variant_data = {
-            "clinvarId": variant_id,
-            "variantName": "Mock Variant",
-            "clinicalSignificance": "Benign",
-            "reviewStatus": "criteria provided, single submitter",
-            "lastEvaluated": datetime.now().isoformat(),
-            "gene": "MOCK1",
-            "nucleotideChange": "c.123G>A",
-            "proteinChange": "p.Val41Met"
-        }
-        
-        # Cache result
-        self._write_cache(cache_key, variant_data)
-        return variant_data
-    
-    async def search_variants(self, gene: str, significance: str = None) -> List[Dict]:
+
+        async def fetch():
+            variants = await self._esummary([variant_id])
+            return variants[0] if variants else None
+
+        return await self._cached_fetch(cache_key, self.CACHE_TTL_HOURS, fetch)
+
+    async def search_variants(
+        self,
+        gene: str,
+        significance: Optional[str] = None,
+        retmax: int = 20,
+    ) -> List[Dict]:
         """
-        Search variants by gene and clinical significance.
-        
+        Search variants by gene, optionally filtered by clinical significance.
+
         Args:
-            gene: Gene symbol (e.g., "BRCA1")
-            significance: Clinical significance filter (optional)
-        
+            gene: Gene symbol (e.g. "BRCA1").
+            significance: Optional clinical significance filter
+                          (e.g. "pathogenic").
+            retmax: Maximum number of variants to return.
+
         Returns:
-            List of variant data dicts
-            
+            List of normalised variant dicts (possibly empty).
+
+        Raises:
+            ExternalAPIError: on upstream failure with no cached copy.
+
         Implements:
             SRS FR-3.10.2 - Variant search
         """
-        cache_key = f"gene_{gene}_{significance or 'all'}"
-        
-        # Check cache first
-        if self._is_cache_valid(self._get_cache_path(cache_key)):
-            return self._read_cache(cache_key)
-        
-        # Try actual API call
-        try:
-            params = {
-                "db": "clinvar",
-                "term": gene,
-                "retmode": "json",
-                "retmax": 100
-            }
-            if self.api_key:
-                params["api_key"] = self.api_key
+        cache_key = f"gene_{gene}_{significance or 'all'}_{retmax}"
+
+        async def fetch():
+            term = f"{gene}[gene]"
             if significance:
-                params["clinical_significance"] = significance
-            
-            result = await self._make_request("esearch.fcgi", params)
-            if result:
-                self._write_cache(cache_key, result)
-                return result
-        except Exception as e:
-            # Fall back to mock data on API error
-            pass
-        
-        # Return mock data as fallback
-        variants = [{
-            "clinvarId": "MOCK-001",
-            "variantName": f"{gene} mock variant",
-            "clinicalSignificance": significance or "Benign",
-            "gene": gene,
-            "nucleotideChange": "c.123G>A",
-            "proteinChange": "p.Val41Met"
-        }]
-        
-        # Cache result
-        self._write_cache(cache_key, variants)
-        return variants
-    
-    async def get_variant_by_coordinates(self, chrom: str, pos: int, ref: str, alt: str) -> Optional[Dict]:
+                term += f' AND "{significance}"[Clinical significance]'
+            uids = await self._esearch(term, retmax=retmax)
+            return await self._esummary(uids)
+
+        return await self._cached_fetch(
+            cache_key, self.CACHE_TTL_HOURS, fetch, empty=[]
+        )
+
+    async def get_variant_by_coordinates(
+        self, chrom: str, pos: int, ref: str, alt: str, assembly: str = "GRCh38"
+    ) -> Optional[Dict]:
         """
-        Get variant by genomic coordinates (VCF-style).
-        
+        Retrieve a variant by genomic coordinates (VCF-style).
+
         Args:
-            chrom: Chromosome (e.g., "chr1", "1")
-            pos: Genomic position (1-based)
-            ref: Reference allele
-            alt: Alternate allele
-        
+            chrom: Chromosome (e.g. "chr17" or "17").
+            pos: 1-based genomic position.
+            ref: Reference allele.
+            alt: Alternate allele.
+            assembly: Genome assembly for the position term.
+
         Returns:
-            Variant data dict or None if not found
+            Normalised variant dict, or ``None`` if not found.
+
+        Raises:
+            ExternalAPIError: on upstream failure with no cached copy.
         """
-        cache_key = f"coords_{chrom}_{pos}_{ref}_{alt}"
-        
-        # Check cache first
-        if self._is_cache_valid(self._get_cache_path(cache_key)):
-            return self._read_cache(cache_key)
-        
-        # Try actual API call
-        try:
-            # ClinVar uses chromosome:start-end format
-            chrom_num = chrom.lstrip('chr')
-            params = {
-                "db": "clinvar",
-                "chr": chrom_num,
-                "start": pos,
-                "end": pos,
-                "retmode": "json"
-            }
-            if self.api_key:
-                params["api_key"] = self.api_key
-            
-            result = await self._make_request("esearch.fcgi", params)
-            if result:
-                self._write_cache(cache_key, result)
-                return result
-        except Exception as e:
-            # Fall back to mock data on API error
-            pass
-        
-        # Return mock data as fallback
-        variant_data = {
-            "clinvarId": "MOCK-COORDS-001",
-            "variantName": f"{chrom}:{pos} {ref}>{alt}",
-            "clinicalSignificance": "VUS",
-            "gene": "MOCK1",
-            "nucleotideChange": f"c.{pos}{ref}>{alt}",
-            "genomicCoordinates": {
-                "chromosome": chrom,
-                "position": pos,
-                "reference": ref,
-                "alternate": alt
-            }
+        cache_key = f"coords_{assembly}_{chrom}_{pos}_{ref}_{alt}"
+        chrom_num = chrom[3:] if chrom.lower().startswith("chr") else chrom
+
+        async def fetch():
+            term = (
+                f"{chrom_num}[Chromosome] AND "
+                f"{pos}[Base Position for Assembly {assembly}]"
+            )
+            uids = await self._esearch(term, retmax=5)
+            variants = await self._esummary(uids)
+            # Prefer an exact ref>alt match when available.
+            for variant in variants:
+                coords = variant.get("genomicCoordinates") or {}
+                if (
+                    coords.get("reference") == ref
+                    and coords.get("alternate") == alt
+                ):
+                    return variant
+            return variants[0] if variants else None
+
+        return await self._cached_fetch(cache_key, self.CACHE_TTL_HOURS, fetch)
+
+    # ------------------------------------------------------------------
+    # Normalisation
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _normalize_variant(doc: Dict) -> Dict:
+        """Transform a ClinVar esummary docsum into our variant shape."""
+        germline = doc.get("germline_classification") or {}
+
+        # Genomic coordinates: prefer the current variation_loc entry.
+        coords: Dict = {}
+        canonical_spdi = None
+        variation_set = doc.get("variation_set") or []
+        if variation_set:
+            vset = variation_set[0]
+            canonical_spdi = vset.get("canonical_spdi") or None
+            for loc in vset.get("variation_loc") or []:
+                if loc.get("status") == "current":
+                    coords = {
+                        "assembly": loc.get("assembly_name"),
+                        "chromosome": loc.get("chr"),
+                        "start": loc.get("start"),
+                        "stop": loc.get("stop"),
+                        "reference": loc.get("ref") or None,
+                        "alternate": loc.get("alt") or None,
+                    }
+                    break
+
+        # SPDI encodes NC_...:pos:ref:alt - use it to fill ref/alt when the loc
+        # entry omits them (common for the current assembly).
+        if canonical_spdi and (not coords.get("reference") or not coords.get("alternate")):
+            parts = canonical_spdi.split(":")
+            if len(parts) == 4:
+                if not coords.get("reference"):
+                    coords["reference"] = parts[2] or None
+                if not coords.get("alternate"):
+                    coords["alternate"] = parts[3] or None
+
+        return {
+            "clinvarId": doc.get("uid"),
+            "accession": doc.get("accession"),
+            "variantName": doc.get("title"),
+            "gene": doc.get("gene_sort"),
+            "clinicalSignificance": germline.get("description"),
+            "reviewStatus": germline.get("review_status"),
+            "lastEvaluated": germline.get("last_evaluated"),
+            "molecularConsequence": doc.get("molecular_consequence_list") or [],
+            "proteinChange": doc.get("protein_change") or None,
+            "variantType": doc.get("obj_type"),
+            "canonicalSpdi": canonical_spdi,
+            "genomicCoordinates": coords or None,
         }
-        
-        # Cache result
-        self._write_cache(cache_key, variant_data)
-        return variant_data
 
 
 if __name__ == "__main__":
-    # Self-test
-    print("Testing ClinVar Client...")
-    
-    client = ClinVarClient()
-    
-    # Test get_variant
-    print("\n1. Get Variant by ID:")
-    variant = client.get_variant("12345")
-    print(f"   Variant ID: {variant['clinvarId']}")
-    print(f"   Significance: {variant['clinicalSignificance']}")
-    
-    # Test search_variants
-    print("\n2. Search Variants by Gene:")
-    variants = client.search_variants("BRCA1", significance="Pathogenic")
-    print(f"   Found {len(variants)} variants for gene 'BRCA1'")
-    if variants:
-        print(f"   First variant: {variants[0]['variantName']}")
-    
-    # Test get_variant_by_coordinates
-    print("\n3. Get Variant by Coordinates:")
-    variant = client.get_variant_by_coordinates("chr17", 43044295, "G", "A")
-    print(f"   Variant: {variant['variantName']}")
-    print(f"   Coordinates: {variant['genomicCoordinates']}")
+    # Live self-test (requires network access).
+    logging.basicConfig(level=logging.INFO)
+    print("Testing ClinVar client (live)...")
+
+    async def _main():
+        client = ClinVarClient()
+        try:
+            print("\n1. Search variants for BRCA1:")
+            variants = await client.search_variants("BRCA1", retmax=3)
+            print(f"   Found {len(variants)} variants")
+            for v in variants:
+                print(f"   - {v['variantName']} => {v['clinicalSignificance']}")
+
+            if variants:
+                vid = variants[0]["clinvarId"]
+                print(f"\n2. Get variant by ID ({vid}):")
+                variant = await client.get_variant(vid)
+                if variant:
+                    print(f"   {variant['variantName']}")
+                    print(f"   Coordinates: {variant['genomicCoordinates']}")
+        finally:
+            await client.aclose()
+
+    asyncio.run(_main())
