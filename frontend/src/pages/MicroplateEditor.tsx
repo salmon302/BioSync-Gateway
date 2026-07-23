@@ -40,6 +40,8 @@ const MicroplateEditor: React.FC = () => {
   const [showObservation, setShowObservation] = useState(false)
   const [selectedObservation, setSelectedObservation] = useState<any>(null)
   const [, setImportExportData] = useState<string>('')
+  const [showBatchModal, setShowBatchModal] = useState(false)
+  const [batchInput, setBatchInput] = useState('')
   const wellClickStartTime = React.useRef<number>(0)
 
   // Initialize plate data
@@ -145,6 +147,105 @@ const MicroplateEditor: React.FC = () => {
     setSelectionStart(null)
     dragEndRef.current = null
   }, [isDragSelecting, selectionStart, plateData, selectedWells])
+
+  // Parse coordinate ranges like "A-D, 1-6" into well keys (SRS FR-3.2.4)
+  // When both row and column ranges are specified, the intersection is selected.
+  // When only row ranges are specified, entire rows are selected.
+  // When only column ranges are specified, entire columns are selected.
+  const parseCoordinateRange = (input: string): Set<string> => {
+    const result = new Set<string>()
+    const parts = input.split(',').map(p => p.trim()).filter(Boolean)
+
+    const maxRows = plateType === '96-well' ? 8 : 16
+    const maxCols = plateType === '96-well' ? 12 : 24
+
+    const rowRanges: Array<[number, number]> = []
+    const colRanges: Array<[number, number]> = []
+
+    for (const part of parts) {
+      // Match patterns like "A-D" or "A" (row ranges)
+      const rowRangeMatch = part.match(/^([A-H])\s*-\s*([A-H])$/i)
+      const singleRowMatch = part.match(/^([A-H])$/i)
+      // Match patterns like "1-6" or "1" (column ranges)
+      const colRangeMatch = part.match(/^(\d+)\s*-\s*(\d+)$/)
+      const singleColMatch = part.match(/^(\d+)$/)
+
+      if (rowRangeMatch) {
+        const startRow = parseInt(rowRangeMatch[1], 36) - 10  // A=10 in base36
+        const endRow = parseInt(rowRangeMatch[2], 36) - 10
+        rowRanges.push([Math.min(startRow, endRow), Math.max(startRow, endRow)])
+      } else if (singleRowMatch) {
+        const row = parseInt(singleRowMatch[1], 36) - 10
+        rowRanges.push([row, row])
+      } else if (colRangeMatch) {
+        const startCol = parseInt(colRangeMatch[1]) - 1
+        const endCol = parseInt(colRangeMatch[2]) - 1
+        colRanges.push([Math.min(startCol, endCol), Math.max(startCol, endCol)])
+      } else if (singleColMatch) {
+        const col = parseInt(singleColMatch[1]) - 1
+        colRanges.push([col, col])
+      }
+    }
+
+    // Build a set of row indices and column indices from the ranges
+    const rowIndices = new Set<number>()
+    for (const [lo, hi] of rowRanges) {
+      for (let r = lo; r <= hi; r++) {
+        if (r >= 0 && r < maxRows) rowIndices.add(r)
+      }
+    }
+
+    const colIndices = new Set<number>()
+    for (const [lo, hi] of colRanges) {
+      for (let c = lo; c <= hi; c++) {
+        if (c >= 0 && c < maxCols) colIndices.add(c)
+      }
+    }
+
+    // If both rows and columns specified → intersection (rectangle)
+    // If only rows → entire rows
+    // If only columns → entire columns
+    if (rowIndices.size > 0 && colIndices.size > 0) {
+      for (const r of rowIndices) {
+        for (const c of colIndices) {
+          result.add(`${r}-${c}`)
+        }
+      }
+    } else if (rowIndices.size > 0) {
+      for (const r of rowIndices) {
+        for (let c = 0; c < maxCols; c++) {
+          result.add(`${r}-${c}`)
+        }
+      }
+    } else if (colIndices.size > 0) {
+      for (const c of colIndices) {
+        for (let r = 0; r < maxRows; r++) {
+          result.add(`${r}-${c}`)
+        }
+      }
+    }
+
+    return result
+  }
+
+  // Handle batch coordinate selection (SRS FR-3.2.4)
+  const handleBatchSelect = useCallback(() => {
+    if (!batchInput.trim()) return
+
+    const wellKeys = parseCoordinateRange(batchInput)
+    if (wellKeys.size === 0) {
+      alert('Invalid coordinate format. Use formats like "A-D", "1-6", or "A-D, 1-6".')
+      return
+    }
+
+    setSelectedWells(wellKeys)
+    setShowBatchModal(false)
+    setBatchInput('')
+    trackInteraction('batch_coordinate_select', 'MicroplateEditor', {
+      wellsSelected: wellKeys.size,
+      input: batchInput
+    })
+  }, [batchInput, plateType, trackInteraction])
 
   // Keyboard navigation - SRS NFR-U2
   useEffect(() => {
@@ -267,6 +368,13 @@ const MicroplateEditor: React.FC = () => {
           onMouseDown={() => handleDragStart(well.row, well.col)}
           onMouseEnter={() => handleDragOver(well.row, well.col)}
           onMouseUp={handleDragEnd}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault()
+              handleWellClick(well.row, well.col)
+            }
+          }}
+          tabIndex={0}
           title={`Well ${String.fromCharCode(65 + well.row)}${well.col + 1}`}
         >
           <span className="well-label">
@@ -302,6 +410,7 @@ const MicroplateEditor: React.FC = () => {
         </label>
         <button onClick={handleImportCSV}>Import CSV</button>
         <button onClick={handleExportJSON}>Export JSON</button>
+        <button onClick={() => setShowBatchModal(true)} disabled={selectedWells.size === 0}>Batch Select</button>
         <button disabled={selectedWells.size === 0}>Clear Selection</button>
       </div>
 
@@ -330,6 +439,37 @@ const MicroplateEditor: React.FC = () => {
             <p><strong>Code:</strong> {selectedObservation.code?.coding?.[0]?.display}</p>
             <p><strong>Value:</strong> {selectedObservation.valueQuantity?.value} {selectedObservation.valueQuantity?.unit}</p>
             <p><strong>Timestamp:</strong> {selectedObservation.effectiveDateTime}</p>
+          </div>
+        </div>
+      )}
+
+      {/* Batch Coordinate Input Modal - SRS FR-3.2.4 */}
+      {showBatchModal && (
+        <div className="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="batch-modal-title">
+          <div className="batch-modal" tabIndex={-1}>
+            <h3 id="batch-modal-title">Batch Coordinate Selection</h3>
+            <p>Enter well coordinates to select. Supported formats:</p>
+            <ul>
+              <li><code>A-D</code> — rows A through D (entire rows)</li>
+              <li><code>1-6</code> — columns 1 through 6 (entire columns)</li>
+              <li><code>A-D, 1-6</code> — rows A-D AND columns 1-6 (intersection)</li>
+            </ul>
+            <input
+              type="text"
+              className="batch-input"
+              placeholder="e.g. A-D, 1-6"
+              value={batchInput}
+              onChange={(e) => setBatchInput(e.target.value)}
+              autoFocus
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') handleBatchSelect()
+                if (e.key === 'Escape') setShowBatchModal(false)
+              }}
+            />
+            <div className="modal-actions">
+              <button onClick={() => setShowBatchModal(false)}>Cancel</button>
+              <button onClick={handleBatchSelect} className="primary-btn">Select Wells</button>
+            </div>
           </div>
         </div>
       )}

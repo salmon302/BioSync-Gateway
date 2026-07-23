@@ -135,4 +135,65 @@ describe('MicroplateEditor', () => {
     const selected = document.querySelectorAll('.well.selected')
     expect(selected.length).toBe(9)
   })
+
+  it('batch select modal opens and selects coordinate range', async () => {
+    const user = userEvent.setup()
+    renderEditor()
+
+    // First select a well so Batch Select button is enabled
+    const a1Well = screen.getByText('A1').closest('.well')!
+    await user.click(a1Well)
+
+    await waitFor(() => {
+      expect(screen.getByText('Selected: 1 wells')).toBeInTheDocument()
+    })
+
+    // Open batch modal
+    await user.click(screen.getByText('Batch Select'))
+    expect(screen.getByText('Batch Coordinate Selection')).toBeInTheDocument()
+
+    // Enter coordinate range "A-D, 1-6" = 4 rows × 6 cols = 24 wells
+    const input = screen.getByPlaceholderText('e.g. A-D, 1-6')
+    await user.clear(input)
+    await user.type(input, 'A-D, 1-6')
+
+    // Submit
+    await user.click(screen.getByText('Select Wells'))
+
+    await waitFor(() => {
+      expect(screen.getByText('Selected: 24 wells')).toBeInTheDocument()
+    })
+  })
+
+  it('batch select modal closes on Escape', async () => {
+    const user = userEvent.setup()
+    renderEditor()
+
+    const a1Well = screen.getByText('A1').closest('.well')!
+    await user.click(a1Well)
+
+    await user.click(screen.getByText('Batch Select'))
+    expect(screen.getByText('Batch Coordinate Selection')).toBeInTheDocument()
+
+    await user.keyboard('{Escape}')
+    expect(screen.queryByText('Batch Coordinate Selection')).not.toBeInTheDocument()
+  })
+
+  it('batch select with invalid input shows alert', async () => {
+    const user = userEvent.setup()
+    const alertSpy = vi.spyOn(window, 'alert').mockImplementation(() => {})
+    renderEditor()
+
+    const a1Well = screen.getByText('A1').closest('.well')!
+    await user.click(a1Well)
+
+    await user.click(screen.getByText('Batch Select'))
+    const input = screen.getByPlaceholderText('e.g. A-D, 1-6')
+    await user.clear(input)
+    await user.type(input, 'invalid')
+
+    await user.click(screen.getByText('Select Wells'))
+    expect(alertSpy).toHaveBeenCalledWith(expect.stringContaining('Invalid coordinate format'))
+    alertSpy.mockRestore()
+  })
 })

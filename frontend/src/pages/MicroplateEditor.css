@@ -174,3 +174,153 @@
   margin: 6px 0;
   font-size: 14px;
 }
+
+/* Batch coordinate modal (SRS FR-3.2.4) */
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.batch-modal {
+  background: white;
+  border-radius: 8px;
+  padding: 24px;
+  min-width: 380px;
+  max-width: 90vw;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+  outline: none;
+}
+
+.batch-modal h3 {
+  margin-top: 0;
+}
+
+.batch-modal ul {
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.batch-modal code {
+  background: #f0f0f0;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 12px;
+}
+
+.batch-input {
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  font-size: 14px;
+  margin: 12px 0;
+  box-sizing: border-box;
+}
+
+.batch-input:focus {
+  outline: 2px solid var(--primary-color);
+  outline-offset: 1px;
+}
+
+.modal-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+  margin-top: 16px;
+}
+
+.modal-actions button {
+  padding: 8px 16px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background: #fff;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.modal-actions .primary-btn {
+  background: var(--primary-color);
+  color: #fff;
+  border-color: var(--primary-color);
+}
+
+.modal-actions .primary-btn:hover {
+  opacity: 0.85;
+}
+
+/* Focus styles for keyboard navigation (SRS NFR-U2) */
+.well:focus {
+  outline: 2px solid var(--primary-color);
+  outline-offset: 2px;
+  z-index: 10;
+}
+
+.microplate-controls button:focus,
+.microplate-controls select:focus {
+  outline: 2px solid var(--primary-color);
+  outline-offset: 1px;
+}
+
+/* Responsive breakpoints (SRS NFR-U3) */
+@media (max-width: 768px) {
+  .microplate-editor {
+    padding: 12px;
+  }
+
+  .microplate-grid {
+    gap: 2px;
+    padding: 10px;
+  }
+
+  .well {
+    font-size: 7px;
+  }
+
+  .well-label {
+    font-size: 6px;
+  }
+
+  .microplate-controls {
+    gap: 6px;
+  }
+
+  .microplate-controls button,
+  .microplate-controls select {
+    padding: 6px 10px;
+    font-size: 12px;
+  }
+
+  .batch-modal {
+    padding: 16px;
+    min-width: 320px;
+  }
+}
+
+@media (max-width: 480px) {
+  .microplate-grid {
+    padding: 5px;
+  }
+
+  .well {
+    font-size: 6px;
+  }
+
+  .microplate-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+  }
+
+  .observation-overlay {
+    min-width: 280px;
+    padding: 16px;
+  }
+}

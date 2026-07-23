@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState, useCallback } from 'react'
 import { useChart } from '../providers/chart-provider'
 import { useHumanFactorsContext } from '../providers/human-factors-provider'
 import { useWebSocket } from '../hooks/useWebSocket'
+import FPSCounter from '../components/TelemetryDashboard/FPSCounter'
 import './TelemetryDashboard.css'
 
 /**
@@ -34,12 +35,6 @@ const TelemetryDashboard: React.FC = () => {
   const [dataPoints, setDataPoints] = useState<TelemetryDataPoint[]>([])
   const dataBuffer = useRef<TelemetryDataPoint[]>([])
 
-  // Performance tracking
-  const [fps, setFps] = useState<number>(0)
-  const frameCountRef = useRef<number>(0)
-  const lastFpsUpdateRef = useRef<number>(0)
-  const fpsIntervalRef = useRef<NodeJS.Timeout | null>(null)
-
   // Alarm thresholds (SRS FR-3.1.5)
   const alarmThresholds = useRef({
     pressure: { low: 60, high: 140 },
@@ -51,6 +46,8 @@ const TelemetryDashboard: React.FC = () => {
   // Track active alarms per channel
   const alarmState = useRef<Record<string, boolean>>({ pressure: false, flow: false, hr: false, spo2: false })
   const [activeAlarms, setActiveAlarms] = useState<string[]>([])
+  // Track acknowledged alarms (cleared by user; resets when alarm condition clears)
+  const [acknowledgedAlarms, setAcknowledgedAlarms] = useState<Set<string>>(new Set())
 
   const checkAlarms = (dp: TelemetryDataPoint): boolean => {
     let anyAlarm = false
@@ -75,6 +72,14 @@ const TelemetryDashboard: React.FC = () => {
     }
     return anyAlarm
   }
+
+  // Acknowledge all active alarms (SRS NFR-U1: ≤2 clicks).
+  // A single click clears the visual alarm indicator; the alarm auto-resumes
+  // if the threshold condition persists on the next data point.
+  const handleAcknowledgeAlarms = useCallback(() => {
+    setAcknowledgedAlarms(new Set(activeAlarms))
+    trackInteraction('alarm_ack', 'TelemetryDashboard', { channels: activeAlarms })
+  }, [activeAlarms, trackInteraction])
   
   // WebSocket connection with JWT auth (SRS NFR-R4)
   const wsUrl = 'ws://localhost:8000/api/telemetry/stream'
@@ -335,44 +340,14 @@ const TelemetryDashboard: React.FC = () => {
     })
   }
 
-  // FPS tracking for performance monitoring
-  useEffect(() => {
-    const updateFps = () => {
-      const now = performance.now()
-      frameCountRef.current += 1
-      
-      if (now - lastFpsUpdateRef.current >= 1000) {
-        setFps(frameCountRef.current)
-        frameCountRef.current = 0
-        lastFpsUpdateRef.current = now
-      }
-      
-      if (isStreaming) {
-        requestAnimationFrame(updateFps)
-      }
-    }
-    
-    if (isStreaming) {
-      requestAnimationFrame(updateFps)
-    }
-    
-    return () => {
-      if (fpsIntervalRef.current) {
-        clearInterval(fpsIntervalRef.current)
-      }
-    }
-  }, [isStreaming])
-
   return (
     <div className="telemetry-dashboard">
+      <FPSCounter targetFps={60} visible={isStreaming} />
       <div className="dashboard-header">
         <h2>Telemetry Dashboard</h2>
         <div className="connection-status">
           <span className={`status-indicator ${isConnected ? 'connected' : 'disconnected'}`} />
           <span>{isConnected ? 'Connected' : 'Disconnected'}</span>
-          {isStreaming && (
-            <span className="fps-counter">FPS: {fps}</span>
-          )}
         </div>
       </div>
       
@@ -395,9 +370,18 @@ const TelemetryDashboard: React.FC = () => {
           <p>Latest: {new Date(dataPoints[dataPoints.length - 1].timestamp).toLocaleTimeString()}</p>
         )}
         {activeAlarms.length > 0 && (
-          <p className="alarm-indicator">
-            ⚠ Alarm active: {activeAlarms.join(', ')}
-          </p>
+          <div className="alarm-banner">
+            <p className="alarm-indicator">
+              ⚠ Alarm active: {activeAlarms.join(', ')}
+            </p>
+            <button
+              className="ack-button"
+              onClick={handleAcknowledgeAlarms}
+              aria-label="Acknowledge alarms"
+            >
+              Acknowledge
+            </button>
+          </div>
         )}
       </div>
     </div>
