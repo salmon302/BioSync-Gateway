@@ -4,13 +4,20 @@ Implements SRS §3.7 - FHIR Interoperability
 """
 
 from fastapi import APIRouter, Depends, HTTPException, Response
-from typing import Dict, Any, List
+from sqlalchemy.orm import Session
+from sqlalchemy.exc import SQLAlchemyError
+from typing import Dict, Any, List, Optional, Tuple
 from fastapi.responses import JSONResponse
+import logging
+from uuid import uuid4
 
 from api.auth import get_current_user, require_scope
 from fhir_validator import validate_resource, to_operation_outcome, FHIRValidator
+from database import get_db
+from models import Observation
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 @router.post("/Observation")
@@ -90,94 +97,65 @@ async def create_device_metric(
 @router.post("/Bundle")
 async def process_bundle(
     bundle: dict,
+    db: Session = Depends(get_db),
     current_user=Depends(require_scope("fhir_write"))
 ):
     """
-    Process FHIR Bundle (transaction/batch).
+    Process FHIR Bundle (transaction/batch) with all-or-nothing persistence.
     Implements SRS FR-3.7.5
-    
+
     Args:
         bundle: FHIR Bundle resource with entries to process
-    
+
     Returns:
-        Bundle response with processed entries or OperationOutcome error
-        Implements transaction semantics with rollback on error
+        Bundle response with processed entries or OperationOutcome error.
+        For 'transaction' bundles, any validation or persistence error rolls
+        back the entire bundle (all-or-nothing). For 'batch' bundles, only the
+        failing entries are reported while valid entries are persisted.
     """
     # Validate bundle structure
     is_valid, operation_outcome = validate_resource(bundle)
-    
+
     if not is_valid:
         return JSONResponse(
             content=operation_outcome,
             media_type="application/fhir+json",
             status_code=400
         )
-    
-    bundle_type = bundle.get("type", "transaction")
+
+    bundle_type = (bundle.get("type") or "transaction").lower()
     entries = bundle.get("entry", [])
-    
-    # Process entries with transaction semantics
-    processed_entries = []
-    errors = []
-    
+
+    # Pass 1: validate every entry and plan persistence
+    plan: List[Tuple[int, Dict, str, str, bool, Optional[Dict]]] = []
     for i, entry in enumerate(entries):
         request = entry.get("request", {})
-        method = request.get("method", "GET")
+        method = str(request.get("method", "POST")).upper()
         url = request.get("url", "")
         resource = entry.get("resource", {})
-        
-        # Validate each resource
+
+        entry_valid = True
+        entry_outcome = None
         if resource:
             res_type = resource.get("resourceType")
-            is_valid, outcome = validate_resource(resource)
-            
-            if not is_valid:
-                # Add location info to errors
+            entry_valid, outcome = validate_resource(resource)
+            if not entry_valid:
                 for issue in outcome.get("issue", []):
-                    issue["location"].insert(0, f"entry[{i}]")
-                errors.append(outcome)
-                continue
-        
-        # Process based on method
-        if method == "POST":
-            # Create resource
-            processed_entries.append({
-                "response": {
-                    "status": "201 Created",
-                    "location": f"{url}/{i}",
-                    "code": "created"
-                }
-            })
-        elif method == "PUT":
-            # Update resource
-            processed_entries.append({
-                "response": {
-                    "status": "200 OK",
-                    "code": "ok"
-                }
-            })
-        elif method == "DELETE":
-            # Delete resource
-            processed_entries.append({
-                "response": {
-                    "status": "200 OK",
-                    "code": "ok"
-                }
-            })
-        else:
-            processed_entries.append({
-                "response": {
-                    "status": "200 OK",
-                    "code": "ok"
-                }
-            })
-    
-    # If any errors, return OperationOutcome (rollback)
-    if errors:
+                    loc = issue.get("location") or []
+                    loc.insert(0, f"entry[{i}]")
+                    issue["location"] = loc
+                entry_outcome = outcome
+
+        plan.append((i, resource, method, url, entry_valid, entry_outcome))
+
+    validation_errors = [p[5] for p in plan if not p[4]]
+
+    # Transaction bundles abort the whole operation on any error
+    if bundle_type == "transaction" and validation_errors:
+        db.rollback()
         combined_issues = []
-        for err in errors:
+        for err in validation_errors:
             combined_issues.extend(err.get("issue", []))
-        
         outcome = {
             "resourceType": "OperationOutcome",
             "issue": combined_issues
@@ -187,14 +165,89 @@ async def process_bundle(
             media_type="application/fhir+json",
             status_code=400
         )
-    
-    # Return successful bundle response
+
+    # Pass 2: persist planned entries transactionally
+    processed_entries = []
+    try:
+        for i, resource, method, url, entry_valid, entry_outcome in plan:
+            if not entry_valid:
+                # Batch mode: report failure, do not persist
+                processed_entries.append({
+                    "response": {
+                        "status": "400 Bad Request",
+                        "code": "error",
+                        "outcome": entry_outcome
+                    }
+                })
+                continue
+
+            if not resource:
+                processed_entries.append({
+                    "response": {"status": "200 OK", "code": "ok"}
+                })
+                continue
+
+            res_type = resource.get("resourceType")
+
+            if res_type == "Observation" and method in ("POST", "PUT"):
+                code = resource.get("code", {}) or {}
+                coding = code.get("coding") or [{}]
+                obs_code = coding[0].get("code") or code.get("text") or "unknown"
+                vq = resource.get("valueQuantity", {})
+                db_obs = Observation(
+                    observation_uid=str(uuid4()),
+                    observation_code=obs_code,
+                    value_quantity=vq,
+                    unit=vq.get("unit") or vq.get("code"),
+                    raw_data=resource.get("raw_data"),
+                    filtered_data=resource.get("filtered_data"),
+                    fhir_resource=resource,
+                )
+                db.add(db_obs)
+                db.flush()
+                location = f"{url}/{db_obs.observation_uid}"
+                processed_entries.append({
+                    "response": {
+                        "status": "201 Created",
+                        "location": location,
+                        "code": "created"
+                    }
+                })
+            else:
+                # Non-persisted resource types acknowledged without storage
+                status_code = "200 OK" if method == "PUT" else "201 Created"
+                processed_entries.append({
+                    "response": {
+                        "status": status_code,
+                        "location": url,
+                        "code": "ok"
+                    }
+                })
+
+        db.commit()
+    except SQLAlchemyError as e:
+        db.rollback()
+        logger.error(f"Bundle transaction failed: {e}")
+        outcome = {
+            "resourceType": "OperationOutcome",
+            "issue": [{
+                "severity": "error",
+                "code": "exception",
+                "details": {"text": f"Transaction aborted: {str(e)}"}
+            }]
+        }
+        return JSONResponse(
+            content=outcome,
+            media_type="application/fhir+json",
+            status_code=400
+        )
+
     response_bundle = {
         "resourceType": "Bundle",
-        "type": "transaction-response",
+        "type": "transaction-response" if bundle_type == "transaction" else "batch-response",
         "entry": processed_entries
     }
-    
+
     return JSONResponse(
         content=response_bundle,
         media_type="application/fhir+json"

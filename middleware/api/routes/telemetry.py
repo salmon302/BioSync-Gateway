@@ -3,18 +3,60 @@ Telemetry Routes
 Implements SRS §3.1 - Telemetry Dashboard
 """
 
-from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect, HTTPException, status
 from fastapi.security import HTTPBearer
+from sqlalchemy.orm import Session
+from sqlalchemy.exc import SQLAlchemyError
 from typing import List, Dict, Optional
 import logging
 import json
+import time
 from datetime import datetime
+from uuid import uuid4
 
 from api.auth import get_current_user, require_scope, verify_token, User
+from api.middleware.response_time import track_ws_relay, record_ingestion_rate, record_ws_connection
 from engine.signal import MultiChannelEMAFilter
+from database import get_db
+from models import Observation
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+# Per-channel physiological alarm thresholds evaluated on the EMA-filtered value.
+# Prevents false alarms from noisy raw samples (SRS FR-3.5.4).
+# Thresholds reflect SRS §3.1.5 (e.g. 150 mmHg arthroscopic pump pressure limit).
+ALARM_THRESHOLDS = {
+    "pressure": {"high": 150.0},                  # mmHg
+    "hr": {"high": 120.0, "low": 50.0},          # bpm
+    "spo2": {"low": 90.0},                        # %
+    "flow": {"high": 60.0, "low": -60.0},         # L/min
+}
+
+
+def evaluate_alarm(channel: str, filtered_value: Optional[float]) -> Optional[Dict]:
+    """
+    Evaluate alarm state for a channel using the EMA-filtered value.
+
+    Args:
+        channel: Resolved telemetry channel name
+        filtered_value: EMA-filtered observation value
+
+    Returns:
+        Alarm dict with active flag and severity, or None if channel unknown.
+
+    Implements:
+        SRS FR-3.5.4 - Filtered alarms (false alarm prevention)
+    """
+    thresholds = ALARM_THRESHOLDS.get(channel)
+    if not thresholds or filtered_value is None:
+        return None
+
+    if "high" in thresholds and filtered_value > thresholds["high"]:
+        return {"active": True, "direction": "high", "threshold": thresholds["high"]}
+    if "low" in thresholds and filtered_value < thresholds["low"]:
+        return {"active": True, "direction": "low", "threshold": thresholds["low"]}
+    return {"active": False, "direction": None, "threshold": None}
 
 # Bearer token extractor for WebSocket auth
 bearer_scheme = HTTPBearer(auto_error=False)
@@ -33,19 +75,22 @@ class ConnectionManager:
     async def connect(self, websocket: WebSocket):
         await websocket.accept()
         self.active_connections.append(websocket)
+        record_ws_connection(1)
         logger.info(f"WebSocket connected: {websocket.client}")
         
         # Send buffered messages for replay
         if self.message_buffer:
             for msg in self.message_buffer[-100:]:
                 try:
-                    await websocket.send_json(msg)
+                    async with track_ws_relay():
+                        await websocket.send_json(msg)
                 except Exception:
                     break
     
     def disconnect(self, websocket: WebSocket):
         if websocket in self.active_connections:
             self.active_connections.remove(websocket)
+            record_ws_connection(-1)
             logger.info(f"WebSocket disconnected: {websocket.client}")
     
     async def broadcast(self, message: Dict):
@@ -57,7 +102,8 @@ class ConnectionManager:
         disconnected = []
         for connection in self.active_connections:
             try:
-                await connection.send_json(message)
+                async with track_ws_relay():
+                    await connection.send_json(message)
             except Exception:
                 disconnected.append(connection)
         
@@ -129,33 +175,82 @@ async def telemetry_stream(websocket: WebSocket, token: Optional[str] = None):
 @router.post("/ingest")
 async def ingest_telemetry(
     telemetry_data: dict,
+    db: Session = Depends(get_db),
     current_user=Depends(require_scope("telemetry_write"))
 ):
     """
     Ingest telemetry data from medical devices.
-    Stores raw data and triggers filtering pipeline.
-    Implements SRS FR-3.5.3 - Raw vs filtered storage.
+    Applies EMA filtering, evaluates alarms on the filtered signal, and persists
+    both raw and filtered values to the immutable observations table.
+    Implements SRS FR-3.5.1, FR-3.5.3, FR-3.5.4.
     """
-    # Apply EMA filtering to observations
     observations = telemetry_data.get("observations", [])
     filtered_observations = []
-    
-    for obs in observations:
-        # Store raw value
-        raw_value = obs.get("valueQuantity", {}).get("value")
-        obs["raw_data"] = {
-            "value": raw_value,
-            "unit": obs.get("valueQuantity", {}).get("unit"),
-            "timestamp": datetime.utcnow().isoformat()
-        }
-        
-        # Apply EMA filter
-        filtered_obs = ema_filter.filter_observation(obs)
-        filtered_observations.append(filtered_obs)
-    
+    alarms = []
+    persisted = 0
+    ingest_start = time.perf_counter()
+
+    try:
+        for obs in observations:
+            # Preserve raw value before filtering (FR-3.5.3)
+            raw_value = obs.get("valueQuantity", {}).get("value")
+            obs["raw_data"] = {
+                "value": raw_value,
+                "unit": obs.get("valueQuantity", {}).get("unit"),
+                "timestamp": datetime.utcnow().isoformat()
+            }
+
+            # Apply per-channel EMA filter
+            filtered_obs = ema_filter.filter_observation(obs)
+
+            # Alarm evaluation on the EMA-filtered value (FR-3.5.4)
+            channel = ema_filter.resolve_channel(filtered_obs)
+            filtered_value = (filtered_obs.get("filtered_data") or {}).get("value")
+            alarm = evaluate_alarm(channel, filtered_value)
+            if alarm:
+                filtered_obs["alarm"] = alarm
+                if alarm["active"]:
+                    alarms.append({"channel": channel, **alarm})
+
+            # Persist raw + filtered to observations table (FR-3.5.3)
+            code = filtered_obs.get("code", {}) or {}
+            coding = code.get("coding") or [{}]
+            obs_code = coding[0].get("code") or code.get("text") or "unknown"
+            vq = filtered_obs.get("valueQuantity", {})
+            db_obs = Observation(
+                observation_uid=str(uuid4()),
+                observation_code=obs_code,
+                value_quantity=vq,
+                unit=vq.get("unit") or vq.get("code"),
+                raw_data=filtered_obs.get("raw_data"),
+                filtered_data=filtered_obs.get("filtered_data"),
+                fhir_resource=filtered_obs,
+            )
+            db.add(db_obs)
+            persisted += 1
+
+            filtered_observations.append(filtered_obs)
+
+        # Durable commit to the append-only observations table
+        db.commit()
+    except SQLAlchemyError as e:
+        db.rollback()
+        logger.error(f"Failed to persist telemetry observations: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to persist telemetry observations"
+        )
+
     # Update telemetry data with filtered observations
     telemetry_data["observations"] = filtered_observations
-    
+    telemetry_data["alarms"] = alarms
+
+    # Record ingestion throughput (NFR-P1)
+    if persisted > 0:
+        ingest_elapsed = time.perf_counter() - ingest_start
+        rate = persisted / max(ingest_elapsed, 0.001)
+        record_ingestion_rate(rate)
+
     # Broadcast to WebSocket clients
     message = {
         "type": "telemetry",
@@ -163,8 +258,13 @@ async def ingest_telemetry(
         "timestamp": datetime.utcnow().isoformat()
     }
     await manager.broadcast(message)
-    
-    return {"status": "accepted", "timestamp": datetime.utcnow().isoformat()}
+
+    return {
+        "status": "accepted",
+        "persisted": persisted,
+        "alarms": alarms,
+        "timestamp": datetime.utcnow().isoformat()
+    }
 
 
 @router.get("/stream/info")
@@ -177,5 +277,21 @@ async def get_stream_info():
         "active_connections": len(manager.active_connections),
         "buffer_size": len(manager.message_buffer),
         "supported_channels": ["pressure", "flow", "hr", "spo2"]
+    }
+
+
+@router.get("/ingestion/stats")
+async def get_ingestion_stats():
+    """
+    Get telemetry ingestion statistics.
+    Implements SRS NFR-P1 — telemetry ingestion throughput monitoring.
+    """
+    from api.middleware.response_time import get_metrics
+    snapshot = get_metrics().snapshot()
+    return {
+        "active_connections": len(manager.active_connections),
+        "buffer_size": len(manager.message_buffer),
+        "ingestion_rate_pps": snapshot["throughput"]["ingestion_rate_pps"],
+        "ws_relay_latency_ms": snapshot["websocket"]["relay_latency_ms"],
     }
 

@@ -188,7 +188,17 @@ class MultiChannelEMAFilter:
         'hr': 0.3,
         'spo2': 0.25,
     }
-    
+
+    # LOINC code -> channel name mapping (SRS FR-3.1.4 / FR-3.5.1)
+    # FHIR Observations identify channels via valueQuantity.coding[].code (LOINC),
+    # not code.text, so resolution must fall back to the LOINC code.
+    LOINC_TO_CHANNEL = {
+        '8867-4': 'hr',        # Heart rate
+        '8310-5': 'pressure',   # Systolic blood pressure
+        '85354-9': 'flow',      # Respiratory flow
+        '59408-5': 'spo2',      # Oxygen saturation
+    }
+
     def __init__(self, alpha: float = 0.5, channels: List[str] = None, alphas: dict = None):
         """
         Initialize multi-channel filter with per-channel alpha values.
@@ -210,6 +220,34 @@ class MultiChannelEMAFilter:
             ch_alpha = channel_alphas.get(ch, self.DEFAULT_ALPHAS.get(ch, alpha))
             self.filters[ch] = EMAFilter(ch_alpha)
     
+    @staticmethod
+    def resolve_channel(observation: dict) -> str:
+        """
+        Resolve the telemetry channel name for a FHIR Observation.
+        
+        Channels are identified by their LOINC code in
+        valueQuantity.coding[].code, falling back to code.text.
+        
+        Args:
+            observation: FHIR Observation resource
+        
+        Returns:
+            Channel name ('pressure', 'flow', 'hr', 'spo2') or 'unknown'
+            
+        Implements:
+            SRS FR-3.5.1 - Per-channel EMA filtering
+        """
+        code = observation.get('code', {}) or {}
+        coding = code.get('coding') or []
+        for entry in coding:
+            loinc = entry.get('code')
+            if loinc in MultiChannelEMAFilter.LOINC_TO_CHANNEL:
+                return MultiChannelEMAFilter.LOINC_TO_CHANNEL[loinc]
+        text = code.get('text')
+        if text and text in MultiChannelEMAFilter.DEFAULT_ALPHAS:
+            return text
+        return 'unknown'
+
     def filter_observation(self, observation: dict) -> dict:
         """
         Filter a single FHIR Observation.
@@ -223,18 +261,19 @@ class MultiChannelEMAFilter:
         Implements:
             SRS FR-3.5.3 - Raw vs filtered storage
         """
-        channel = observation.get('code', {}).get('text', 'unknown')
+        channel = self.resolve_channel(observation)
         
         if channel in self.filters:
             value = observation['valueQuantity']['value']
-            filtered_value = self.filters[channel].filter_value(value)
+            ema = self.filters[channel]
+            filtered_value = ema.filter_value(value)
             
-            # Add filtered data to observation
+            # Add filtered data to observation (use per-channel alpha)
             observation['filtered_data'] = {
                 'value': filtered_value,
                 'unit': observation['valueQuantity']['unit'],
                 'filter': 'EMA',
-                'alpha': self.alpha
+                'alpha': ema.alpha
             }
         
         return observation

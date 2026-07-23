@@ -172,6 +172,7 @@ class PulseWorker:
             
         Implements:
             SRS FR-3.6.2 - Simulation stepping
+            SRS NFR-P5 - Pulse Engine time-step ≤ 50 ms
         """
         if self.state != SimulationState.RUNNING:
             raise ValueError(f"Cannot step simulation in state: {self.state}")
@@ -186,6 +187,14 @@ class PulseWorker:
         # Extract required metrics
         metrics = self._extract_metrics()
         self.metrics_history.append(metrics)
+        
+        # Record step latency for NFR-P5 instrumentation
+        try:
+            from api.middleware.response_time import record_pulse_step
+            step_latency_ms = (time.perf_counter() - self.start_time) * 1000 / max(n_steps, 1)
+            record_pulse_step(step_latency_ms)
+        except (ImportError, AttributeError):
+            pass
         
         return metrics.__dict__
     

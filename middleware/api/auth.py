@@ -9,6 +9,7 @@ from jose import JWTError, jwt
 from pydantic import BaseModel
 from typing import Optional, List
 import logging
+from uuid import uuid4
 
 logger = logging.getLogger(__name__)
 
@@ -18,7 +19,7 @@ JWT_ALGORITHM = "HS256"
 JWT_EXPIRATION_HOURS = 1
 JWT_REFRESH_EXPIRATION_DAYS = 7
 
-security = HTTPBearer()
+security = HTTPBearer(auto_error=False)
 
 
 class User(BaseModel):
@@ -48,6 +49,9 @@ async def get_current_user(
         detail="Could not validate credentials",
         headers={"WWW-Authenticate": "Bearer"},
     )
+
+    if credentials is None:
+        raise credentials_exception
     
     try:
         # Decode JWT token
@@ -96,16 +100,18 @@ def create_access_token(data: dict, expires_delta: Optional[int] = None) -> str:
         Encoded JWT token string
     """
     from datetime import datetime, timedelta
-    
+
+    issued_at = datetime.utcnow()
     to_encode = data.copy()
-    
-    if expires_delta:
-        expire = datetime.utcnow() + timedelta(hours=expires_delta)
+    to_encode["jti"] = str(uuid4())
+
+    if expires_delta is not None:
+        expire = issued_at + timedelta(hours=expires_delta)
     else:
-        expire = datetime.utcnow() + timedelta(hours=JWT_EXPIRATION_HOURS)
-    
-    to_encode.update({"exp": expire})
-    
+        expire = issued_at + timedelta(hours=JWT_EXPIRATION_HOURS)
+
+    to_encode.update({"iat": issued_at, "exp": expire})
+
     encoded_jwt = jwt.encode(to_encode, JWT_SECRET, algorithm=JWT_ALGORITHM)
     return encoded_jwt
 
@@ -123,8 +129,11 @@ def create_refresh_token(data: dict) -> str:
     from datetime import datetime, timedelta
     
     to_encode = data.copy()
+    issued_at = datetime.utcnow()
     to_encode.update({
-        "exp": datetime.utcnow() + timedelta(days=JWT_REFRESH_EXPIRATION_DAYS),
+        "iat": issued_at,
+        "exp": issued_at + timedelta(days=JWT_REFRESH_EXPIRATION_DAYS),
+        "jti": str(uuid4()),
         "type": "refresh",
     })
     
