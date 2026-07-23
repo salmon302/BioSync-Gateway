@@ -7,7 +7,8 @@ Tests JWT token lifecycle, scope enforcement, and auth middleware.
 
 import pytest
 import time
-from jose import jwt as pyjwt_decode
+from jose import jwt as jose_jwt
+from api.auth import JWT_SECRET, JWT_ALGORITHM
 
 
 class TestJWTTokenCreation:
@@ -99,6 +100,8 @@ class TestAuthMiddleware:
         })
         response = unauthorized_client.get("/api/protected")
         assert response.status_code == 401
+        # SRS OQ-14: 401 must include WWW-Authenticate: Bearer header
+        assert response.headers.get("WWW-Authenticate") == "Bearer"
 
     def test_invalid_token_rejected(self, unauthorized_client, invalid_jwt_token):
         """Malformed JWT should be rejected."""
@@ -121,6 +124,56 @@ class TestAuthMiddleware:
         response = unauthorized_client.get("/api/protected")
         # Should succeed - token is valid, just has limited scopes
         assert response.status_code == 200
+
+
+class TestAuthEndpoints:
+    """Tests for login and refresh endpoints."""
+
+    def test_login_returns_access_and_refresh_tokens(self, client):
+        response = client.post(
+            "/api/auth/login",
+            json={"username": "admin", "password": "secret"},
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert body["token_type"] == "bearer"
+        assert body["expires_in"] == 3600
+        assert body["access_token"]
+        assert body["refresh_token"]
+
+        access_payload = jose_jwt.decode(
+            body["access_token"], JWT_SECRET, algorithms=[JWT_ALGORITHM]
+        )
+        refresh_payload = jose_jwt.decode(
+            body["refresh_token"], JWT_SECRET, algorithms=[JWT_ALGORITHM]
+        )
+        assert access_payload["sub"] == "admin"
+        assert access_payload["iat"] <= access_payload["exp"]
+        assert refresh_payload["type"] == "refresh"
+
+    def test_refresh_rotates_tokens(self, client):
+        login = client.post(
+            "/api/auth/login",
+            json={"username": "admin", "password": "secret"},
+        )
+        tokens = login.json()
+
+        refresh = client.post(
+            "/api/auth/refresh",
+            json={"refresh_token": tokens["refresh_token"]},
+        )
+        assert refresh.status_code == 200
+        body = refresh.json()
+        assert body["access_token"] != tokens["access_token"]
+        assert body["refresh_token"] != tokens["refresh_token"]
+        assert body["expires_in"] == 3600
+
+    def test_refresh_rejects_access_token(self, client, sample_jwt_token):
+        response = client.post(
+            "/api/auth/refresh",
+            json={"refresh_token": sample_jwt_token},
+        )
+        assert response.status_code == 401
 
 
 class TestScopeEnforcement:
