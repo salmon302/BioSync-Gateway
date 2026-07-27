@@ -41,11 +41,13 @@ services:
   middleware:
     build:
       context: ./middleware
-      dockerfile: Dockerfile
+      dockerfile: ${MIDDLEWARE_DOCKERFILE:-Dockerfile}
+      # Use Dockerfile.pulse for production with Kitware Pulse Engine:
+      #   MIDDLEWARE_DOCKERFILE=Dockerfile.pulse docker compose up --build
     container_name: biosync-middleware
     environment:
       - DATABASE_URL=postgresql://biosync_user:${DB_PASSWORD:-biosync_secure_password}@db:5432/biosync
-      - JWT_SECRET=${JWT_SECRET:-your-super-secret-jwt-key-change-in-production}
+      - JWT_SECRET=${JWT_SECRET:-}
       - ENVIRONMENT=${ENVIRONMENT:-development}
       - DB_SSLMODE=verify-full
       - DB_SSLROOTCERT=/etc/ssl/certs/ca.crt

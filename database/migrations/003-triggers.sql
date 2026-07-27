@@ -94,9 +94,55 @@ CREATE TRIGGER simulations_prevent_delete
     BEFORE DELETE ON simulations
     FOR EACH ROW EXECUTE FUNCTION prevent_delete();
 
+-- human_factors_metrics table (uFMEA data - append-only)
+CREATE TRIGGER human_factors_metrics_prevent_update
+    BEFORE UPDATE ON human_factors_metrics
+    FOR EACH ROW EXECUTE FUNCTION prevent_update();
+
+CREATE TRIGGER human_factors_metrics_prevent_delete
+    BEFORE DELETE ON human_factors_metrics
+    FOR EACH ROW EXECUTE FUNCTION prevent_delete();
+
+-- barcode_indices table (Illumina dictionary - read-only after bulk load)
+CREATE TRIGGER barcode_indices_prevent_update
+    BEFORE UPDATE ON barcode_indices
+    FOR EACH ROW EXECUTE FUNCTION prevent_update();
+
+CREATE TRIGGER barcode_indices_prevent_delete
+    BEFORE DELETE ON barcode_indices
+    FOR EACH ROW EXECUTE FUNCTION prevent_delete();
+
+-- patients table (simulated demographics - append-only after creation)
+CREATE TRIGGER patients_prevent_update
+    BEFORE UPDATE ON patients
+    FOR EACH ROW EXECUTE FUNCTION prevent_update();
+
+CREATE TRIGGER patients_prevent_delete
+    BEFORE DELETE ON patients
+    FOR EACH ROW EXECUTE FUNCTION prevent_delete();
+
+-- device_metrics table (FHIR DeviceMetric - read-only after insertion)
+CREATE TRIGGER device_metrics_prevent_update
+    BEFORE UPDATE ON device_metrics
+    FOR EACH ROW EXECUTE FUNCTION prevent_update();
+
+CREATE TRIGGER device_metrics_prevent_delete
+    BEFORE DELETE ON device_metrics
+    FOR EACH ROW EXECUTE FUNCTION prevent_delete();
+
+-- dilution_worklists table (dilution manifests - append-only after finalization)
+CREATE TRIGGER dilution_worklists_prevent_update
+    BEFORE UPDATE ON dilution_worklists
+    FOR EACH ROW EXECUTE FUNCTION prevent_update();
+
+CREATE TRIGGER dilution_worklists_prevent_delete
+    BEFORE DELETE ON dilution_worklists
+    FOR EACH ROW EXECUTE FUNCTION prevent_delete();
+
 -- ============================================
 -- Hash Chain Trigger Function
 -- SRS FR-3.8.3: Cryptographic hash chain
+-- Formula: H_i = SHA256(H_{i-1} || T_i || U_i || D_prev || D_new || R_i)
 -- ============================================
 
 CREATE OR REPLACE FUNCTION compute_hash_chain()
@@ -106,7 +152,7 @@ DECLARE
     concat_data TEXT;
     genesis_hash CONSTANT VARCHAR(64) := '0000000000000000000000000000000000000000000000000000000000000000';
 BEGIN
-    -- Get the previous hash from the last row in audit_log
+    -- Get the previous hash from the last row in audit_log (H_{i-1})
     SELECT current_hash INTO prev_hash
     FROM audit_log
     ORDER BY id DESC
@@ -117,14 +163,14 @@ BEGIN
         prev_hash := genesis_hash;
     END IF;
     
-    -- Concatenate data for hashing (deterministic order)
+    -- Concatenate data for hashing per SRS FR-3.8.3:
+    --   H_{i-1} || T_i || U_i || D_prev || D_new || R_i
     concat_data := prev_hash || 
-                   TG_TABLE_NAME || 
-                   TG_OP || 
-                   NEW.record_id::TEXT || 
-                   COALESCE(NEW.timestamp::TEXT, CURRENT_TIMESTAMP::TEXT) || 
-                   COALESCE(NEW.user_id, '') || 
-                   COALESCE(NEW.data::TEXT, '{}');
+                   COALESCE(NEW.timestamp::TEXT, CURRENT_TIMESTAMP::TEXT) ||
+                   COALESCE(NEW.user_id, '') ||
+                   COALESCE(NEW.previous_state::TEXT, '{}') ||
+                   COALESCE(NEW.data::TEXT, '{}') ||
+                   COALESCE(NEW.reason, '');
     
     -- Compute SHA-256 hash using pgcrypto
     NEW.previous_hash := prev_hash;
@@ -143,6 +189,7 @@ CREATE TRIGGER audit_log_hash_chain
 -- ============================================
 -- Audit Log Insert Function
 -- Helper function to insert audit entries from application
+-- SRS FR-3.8.3: accepts D_prev (previous_state) and R_i (reason)
 -- ============================================
 
 CREATE OR REPLACE FUNCTION insert_audit_log(
@@ -150,13 +197,15 @@ CREATE OR REPLACE FUNCTION insert_audit_log(
     p_operation VARCHAR(10),
     p_record_id INTEGER,
     p_user_id VARCHAR(255),
-    p_data JSONB
+    p_data JSONB,
+    p_previous_state JSONB DEFAULT NULL,
+    p_reason TEXT DEFAULT NULL
 ) RETURNS INTEGER AS $$
 DECLARE
     new_id INTEGER;
 BEGIN
-    INSERT INTO audit_log (table_name, operation, record_id, user_id, data)
-    VALUES (p_table_name, p_operation, p_record_id, p_user_id, p_data)
+    INSERT INTO audit_log (table_name, operation, record_id, user_id, data, previous_state, reason)
+    VALUES (p_table_name, p_operation, p_record_id, p_user_id, p_data, p_previous_state, p_reason)
     RETURNING id INTO new_id;
     
     RETURN new_id;
@@ -184,11 +233,11 @@ BEGIN
     prev_hash := genesis_hash;
     
     FOR rec IN 
-        SELECT id, table_name, operation, record_id, timestamp, user_id, previous_hash, current_hash, data
+        SELECT id, table_name, operation, record_id, timestamp, user_id, previous_hash, current_hash, data, previous_state, reason
         FROM audit_log
         ORDER BY id ASC
     LOOP
-        -- Check if previous_hash matches expected
+        -- Check if previous_hash matches expected (H_{i-1} linkage)
         IF rec.previous_hash != prev_hash THEN
             integrity_status := 'broken';
             broken_at_row_id := rec.id;
@@ -197,14 +246,14 @@ BEGIN
             RETURN;
         END IF;
         
-        -- Compute expected hash
+        -- Recompute hash with full SRS FR-3.8.3 formula:
+        --   H_{i-1} || T_i || U_i || D_prev || D_new || R_i
         concat_data := rec.previous_hash || 
-                      rec.table_name || 
-                      rec.operation || 
-                      rec.record_id::TEXT || 
-                      rec.timestamp::TEXT || 
-                      COALESCE(rec.user_id, '') || 
-                      rec.data::TEXT;
+                      COALESCE(rec.timestamp::TEXT, CURRENT_TIMESTAMP::TEXT) ||
+                      COALESCE(rec.user_id, '') ||
+                      COALESCE(rec.previous_state::TEXT, '{}') ||
+                      COALESCE(rec.data::TEXT, '{}') ||
+                      COALESCE(rec.reason, '');
         
         computed_hash := encode(digest(concat_data, 'sha256'), 'hex');
         

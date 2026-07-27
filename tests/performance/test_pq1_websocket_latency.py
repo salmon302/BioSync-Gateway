@@ -1,137 +1,57 @@
+# SPDX-License-Identifier: MIT
 """
-PQ-1: WebSocket Latency Benchmark
-Implements SRS NFR-P3 — WebSocket P95 < 50ms
+PQ-1: Real-Load Performance Qualification — k6 migration note & pointer test.
+==========================================================================
 
-Benchmarks WebSocket message serialization/deserialization latency.
+This module previously contained the CI "smoke-only" import micro-benchmarks
+(JSON serialization / throughput latency). Those tests were NOT a faithful
+Performance Qualification of PQ-1 (SRS §7.3): PQ-1 requires a *real*
+distributed load test of 50 concurrent WebSocket/HTTP virtual users against a
+running BioSync-Gateway stack, with the SLOs below.
+
+The authoritative PQ-1 load test now lives in:
+
+    tests/performance/k6/pq1_websocket.js
+
+and is executed by the `pq.yml` GitHub Actions workflow (workflow_dispatch +
+nightly schedule) via the official `grafana/k6` Docker image:
+
+    docker run --rm --network host \
+        -v "$PWD/tests/performance/k6:/scripts" \
+        grafana/k6 run /scripts/pq1_websocket.js \
+        -e BASE_URL=http://localhost:8000 \
+        -e WS_URL=ws://localhost:8000/api/telemetry/stream \
+        -e API_TOKEN=<valid-jwt> \
+        -e PEAK_VUS=50 -e RAMP_MIN=12
+
+Target SLOs (revised D1 plan):
+    - http_req_failed    < 0.01
+    - http_req_duration p(95) < 250 ms   (SRS NFR-P3)
+    - ws_connecting p(95) < 250 ms        (WS-specific, when token supplied)
+
+Fast pytest micro-benchmarks for the algorithmic engines (EMA, Hamming,
+dilution) and the unit/integration suites are retained (AGENTS tooling note:
+"keep pytest micro-benchmarks"). This file now acts as a deterministic,
+fast pointer test so CI retains a signal that the real k6 asset exists.
+
+See also:
+    - docs/URS.md, docs/FRS.md (traceability)
+    - SRS.md §7.3 (PQ-1), §5.1 (NFR-P3)
 """
+
+import os
 
 import pytest
-import time
-import statistics
-import json
+
+_K6_SCRIPT = os.path.join(os.path.dirname(__file__), "k6", "pq1_websocket.js")
 
 
-class TestWebSocketLatency:
-    """Tests for NFR-P3 — WebSocket P95 latency < 50ms."""
-
-    def test_json_serialization_latency(self):
-        """JSON serialization should complete within 50ms P95."""
-        latencies = []
-        message = {
-            "type": "telemetry",
-            "payload": {
-                "heart_rate": 72.5,
-                "blood_pressure": [120, 80],
-                "spo2": 98.2,
-                "timestamp": time.time()
-            },
-            "timestamp": time.time()
-        }
-
-        for _ in range(1000):
-            start = time.perf_counter()
-            serialized = json.dumps(message)
-            deserialized = json.loads(serialized)
-            end = time.perf_counter()
-
-            latencies.append((end - start) * 1000)  # ms
-
-        p95 = sorted(latencies)[int(len(latencies) * 0.95)]
-        avg = statistics.mean(latencies)
-
-        assert p95 < 50.0, f"P95 latency {p95:.3f}ms exceeds 50ms target"
-        assert avg < 10.0, f"Average latency {avg:.3f}ms is too high"
-
-    def test_large_message_serialization(self):
-        """Large telemetry messages should serialize within 50ms."""
-        latencies = []
-
-        # Large message with many channels
-        large_message = {
-            "type": "telemetry",
-            "payload": {
-                "heart_rate": 72.5,
-                "blood_pressure_systolic": 120,
-                "blood_pressure_diastolic": 80,
-                "spo2": 98.2,
-                "respiratory_rate": 16,
-                "temperature": 36.8,
-                "mean_airway_pressure": 12.5,
-                "cardiac_output": 5.2,
-                "stroke_volume": 70,
-                "systemic_vascular_resistance": 1200,
-                "arterial_oxygen_partial_pressure": 95,
-                "central_veinous_pressure": 8,
-                "mean_arterial_pressure": 93
-            },
-            "timestamp": time.time(),
-            "device_id": "multi-channel-device-001"
-        }
-
-        for _ in range(1000):
-            start = time.perf_counter()
-            serialized = json.dumps(large_message)
-            deserialized = json.loads(serialized)
-            end = time.perf_counter()
-
-            latencies.append((end - start) * 1000)
-
-        p95 = sorted(latencies)[int(len(latencies) * 0.95)]
-        assert p95 < 50.0, f"Large message P95 {p95:.3f}ms exceeds 50ms"
-
-    def test_message_throughput(self):
-        """Should process 10,000 messages within reasonable time."""
-        message = {"type": "telemetry", "value": 72.5}
-
-        start = time.perf_counter()
-        for _ in range(10000):
-            json.dumps(message)
-            json.loads(json.dumps(message))
-        end = time.perf_counter()
-
-        elapsed = end - start
-        throughput = 10000 / elapsed
-
-        assert throughput > 1000, f"Throughput {throughput:.0f} msg/s is too low"
-
-    def test_burst_message_handling(self):
-        """Should handle burst of 100 messages without exceeding 50ms P95."""
-        latencies = []
-
-        for _ in range(100):
-            start = time.perf_counter()
-            message = {
-                "type": "telemetry",
-                "payload": {"heart_rate": 72.5 + hash(time.time()) % 100},
-                "timestamp": time.time()
-            }
-            json.dumps(message)
-            json.loads(json.dumps(message))
-            end = time.perf_counter()
-
-            latencies.append((end - start) * 1000)
-
-        p95 = sorted(latencies)[int(len(latencies) * 0.95)]
-        assert p95 < 50.0, f"Burst P95 {p95:.3f}ms exceeds 50ms"
-
-    def test_repeated_serialization_consistency(self):
-        """Repeated serialization should have consistent latency."""
-        latencies = []
-        message = {"type": "telemetry", "value": 72.5}
-
-        for _ in range(500):
-            start = time.perf_counter()
-            json.dumps(message)
-            end = time.perf_counter()
-            latencies.append((end - start) * 1000)
-
-        std_dev = statistics.stdev(latencies)
-        mean = statistics.mean(latencies)
-
-        # Coefficient of variation should be reasonable
-        cv = std_dev / mean if mean > 0 else 0
-        assert cv < 2.0, f"Latency CV {cv:.2f} is too variable"
-
-
-if __name__ == "__main__":
-    pytest.main([__file__, "-v"])
+@pytest.mark.pq1
+@pytest.mark.performance
+def test_pq1_k6_asset_present():
+    """Pointer test: the k6 PQ-1 load script must exist and be non-empty."""
+    assert os.path.isfile(_K6_SCRIPT), (
+        f"PQ-1 k6 load script missing at {_K6_SCRIPT}. "
+        "Real PQ-1 load testing moved to k6 (see module docstring)."
+    )
+    assert os.path.getsize(_K6_SCRIPT) > 0, "PQ-1 k6 load script is empty."

@@ -15,7 +15,7 @@ from typing import Callable
 
 from api.auth import get_current_user, User
 from api.middleware.response_time import ResponseTimeMiddleware, get_metrics
-from api.routes import health, audit, telemetry, plates, fhir, simulations, auth, admin
+from api.routes import health, audit, telemetry, plates, fhir, simulations, auth, admin, human_factors, pkpd, chemistry, digital_twin, mrd
 from engine import init_engines
 
 # Configure logging
@@ -173,8 +173,13 @@ app.include_router(telemetry.router, prefix="/api/telemetry", tags=["telemetry"]
 app.include_router(plates.router, prefix="/api/plates", tags=["plates"])
 app.include_router(fhir.router, prefix="/api/fhir", tags=["fhir"])
 app.include_router(simulations.router, prefix="/api/simulations", tags=["simulations"])
+app.include_router(pkpd.router, prefix="/api/simulation", tags=["simulation-pkpd"])
+app.include_router(chemistry.router, prefix="/api/simulation", tags=["simulation-chemistry"])
+app.include_router(digital_twin.router, prefix="/api/simulation", tags=["simulation-digital-twin"])
+app.include_router(mrd.router, prefix="/api/simulation", tags=["simulation-mrd"])
 app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
 app.include_router(admin.router, prefix="/api/admin", tags=["admin"])
+app.include_router(human_factors.router, prefix="/api/human-factors", tags=["human-factors"])
 
 
 @app.get("/")

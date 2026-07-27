@@ -1,0 +1,102 @@
+name: Performance Qualification (PQ)
+
+# Runs the HEAVY Grafanak6 / dedicated-Postgres load tests for PQ-1 and PQ-3.
+# Intended for disposable cloud runners / self-hosted runners or a local
+# `docker compose` stack. PQ-4 (24h soak) is intentionally NOT wired here
+# (deferred per user direction — see SNDEV/scripts/pq4_24h_ingest.py).
+
+on:
+  workflow_dispatch:
+    inputs:
+      pq:
+        description: "Which PQ load test to run"
+        required: false
+        default: "all"
+        type: choice
+        options:
+          - all
+          - pq1
+          - pq3
+  # Nightly at 03:17 UTC (avoid top-of-hour contention).
+  schedule:
+    - cron: "17 3 * * *"
+
+concurrency:
+  group: pq-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # PQ-1: k6 real-load (50 VUs ramp over ~12 min)
+  # ---------------------------------------------------------------------------
+  pq1-k6:
+    if: >-
+      ${{ github.event_name == 'schedule' ||
+           (github.event_name == 'workflow_dispatch' &&
+            (github.event.inputs.pq == 'all' || github.event.inputs.pq == 'pq1')) }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Start stack (db + middleware)
+        run: |
+          cp .env.example .env
+          docker-compose up -d db middleware
+          # Wait for middleware health (public /api/health).
+          for i in $(seq 1 30); do
+            if curl -fsS http://localhost:8000/api/health; then
+              echo "stack healthy"; break
+            fi
+            sleep 3
+          done
+
+      - name: Run k6 PQ-1 load test (grafana/k6)
+        run: |
+          docker run --rm --network host \
+            -v "$PWD/tests/performance/k6:/scripts" \
+            grafana/k6 run /scripts/pq1_websocket.js \
+            -e BASE_URL=http://localhost:8000 \
+            -e WS_URL=ws://localhost:8000/api/telemetry/stream \
+            -e API_TOKEN="${{ secrets.PQ_API_TOKEN }}" \
+            -e PEAK_VUS=50 -e RAMP_MIN=12
+
+      - name: Tear down stack
+        if: always()
+        run: docker-compose down -v
+
+  # ---------------------------------------------------------------------------
+  # PQ-3: 1M-row hash-chain verification (< 60 s, NFR-P4)
+  # ---------------------------------------------------------------------------
+  pq3-1m:
+    if: >-
+      ${{ github.event_name == 'schedule' ||
+           (github.event_name == 'workflow_dispatch' &&
+            (github.event.inputs.pq == 'all' || github.event.inputs.pq == 'pq3')) }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Start full stack (applies Alembic migrations to DB)
+        run: |
+          cp .env.example .env
+          docker-compose up -d db middleware
+          for i in $(seq 1 30); do
+            if curl -fsS http://localhost:8000/api/health; then
+              echo "stack healthy"; break
+            fi
+            sleep 3
+          done
+
+      - name: Run PQ-3 1M-row hash-chain test
+        env:
+          BIOSYNC_PQ3_DATABASE_URL: "postgresql://biosync_user:biosync_secure_password@localhost:5432/biosync"
+        working-directory: ./middleware
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest
+          pytest ../tests/performance/test_pq3_1m_rows.py -v -s
+
+      - name: Tear down stack
+        if: always()
+        run: docker-compose down -v

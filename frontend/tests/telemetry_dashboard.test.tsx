@@ -118,11 +118,8 @@ describe('TelemetryDashboard', () => {
   })
 
   it('shows Acknowledge button when alarm is active', async () => {
-    const user = userEvent.setup()
     renderDashboard()
 
-    // Simulate an alarm by dispatching a telemetry message with out-of-range pressure
-    const mockWs = (globalThis.WebSocket as any)
     // The MockWebSocket doesn't auto-deliver messages; instead we test the
     // alarm UI path by directly invoking the check via a synthetic event.
     // Since the dashboard only shows alarms from incoming messages, we verify

@@ -162,7 +162,12 @@ class TestHashChainTriggers:
             "plates",
             "plate_wells",
             "devices",
-            "simulations"
+            "simulations",
+            "human_factors_metrics",
+            "barcode_indices",
+            "patients",
+            "device_metrics",
+            "dilution_worklists",
         ]
 
         for table in required_tables:

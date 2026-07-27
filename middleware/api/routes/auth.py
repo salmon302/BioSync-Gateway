@@ -14,6 +14,7 @@ from api.auth import (
     create_access_token,
     create_refresh_token,
     verify_refresh_token,
+    authenticate_user,
     User,
     JWT_EXPIRATION_HOURS,
 )
@@ -45,29 +46,23 @@ class RefreshRequest(BaseModel):
 async def login(token_request: TokenRequest):
     """
     Authenticate user and return access + refresh tokens.
-    Implements SRS NFR-S3 - JWT ≤1 hour lifetime with refresh tokens.
+    Implements SRS FR-3.8.5 / NFR-S2/NFR-S3 - JWT ≤1 hour lifetime with refresh.
+    Implements SRS NFR-S7 - credentials validated against DB, not hardcoded.
     """
-    # TODO: Validate credentials against database
-    # For development, accept any non-empty credentials
-    if not token_request.username or not token_request.password:
+    user = authenticate_user(token_request.username, token_request.password)
+    if user is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid credentials",
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    # In production, hash password and verify against DB
-    # For now, create token with user scopes based on username
-    scopes = ["read", "write"]
-    if token_request.username == "admin":
-        scopes.extend(["admin", "audit_read", "audit_write"])
-
     access_token = create_access_token(
-        data={"sub": token_request.username, "role": "admin", "scopes": scopes},
+        data={"sub": user.username, "role": user.role, "scopes": user.scopes},
         expires_delta=JWT_EXPIRATION_HOURS,
     )
     refresh_token = create_refresh_token(
-        data={"sub": token_request.username, "role": "admin", "scopes": scopes}
+        data={"sub": user.username, "role": user.role, "scopes": user.scopes}
     )
 
     return TokenResponse(

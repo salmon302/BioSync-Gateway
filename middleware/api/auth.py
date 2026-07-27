@@ -1,6 +1,9 @@
 """
 JWT Authentication Module
 Implements SRS §3.7 - Authentication and Authorization
+Implements SRS FR-3.8.5 - JWT Bearer token authentication
+Implements SRS NFR-S2/S3 - All endpoints require valid JWT; ≤1 h lifetime, 24 h refresh
+Implements SRS NFR-S7 - Secrets injected via env/Docker secrets, never hard-coded
 """
 
 from fastapi import Depends, HTTPException, status
@@ -9,17 +12,160 @@ from jose import JWTError, jwt
 from pydantic import BaseModel
 from typing import Optional, List
 import logging
+import os
 from uuid import uuid4
 
 logger = logging.getLogger(__name__)
 
-# JWT Configuration (should be loaded from environment variables)
-JWT_SECRET = "your-super-secret-jwt-key-change-in-production"
+# JWT Configuration (SRS NFR-S7: secrets injected via env/Docker secrets, never hard-coded)
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRATION_HOURS = 1
 JWT_REFRESH_EXPIRATION_DAYS = 7
 
+
+def _load_jwt_secret() -> str:
+    """
+    Load the JWT signing secret from the environment.
+
+    SRS NFR-S7: Secrets shall be injected via Docker secrets or environment
+    variables — never hard-coded. In production this MUST be set; we fail
+    closed (raise) when missing so a misconfigured deploy cannot silently
+    fall back to an insecure default.
+    """
+    secret = os.getenv("JWT_SECRET")
+    if secret:
+        return secret
+
+    # Docker secrets file (preferred in production)
+    secret_file = os.getenv("JWT_SECRET_FILE")
+    if secret_file:
+        try:
+            with open(secret_file, "r") as f:
+                return f.read().strip()
+        except OSError as e:
+            logger.error(f"JWT_SECRET_FILE configured but unreadable: {e}")
+
+    # Development fallback ONLY when ENVIRONMENT=development
+    env = os.getenv("ENVIRONMENT", "production")
+    if env == "development":
+        logger.warning(
+            "JWT_SECRET not set — using insecure development default. "
+            "This MUST NOT be used in production (NFR-S7)."
+        )
+        return "dev-only-insecure-secret-change-me"
+
+    raise RuntimeError(
+        "JWT_SECRET is not set. Refusing to start in production mode (NFR-S7). "
+        "Set the JWT_SECRET environment variable or JWT_SECRET_FILE."
+    )
+
+
+JWT_SECRET = _load_jwt_secret()
+
 security = HTTPBearer(auto_error=False)
+
+# Password hashing (SRS NFR-S2: credentials never stored in plaintext)
+try:
+    from passlib.context import CryptContext
+    pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+    HAS_PASSLIB = True
+except ImportError:  # pragma: no cover
+    HAS_PASSLIB = False
+    pwd_context = None
+    logger.warning("passlib not installed — password hashing disabled (dev only)")
+
+
+def verify_password(plain: str, hashed: str) -> bool:
+    """Verify a plaintext password against a stored hash (SRS NFR-S2)."""
+    if not HAS_PASSLIB:
+        raise RuntimeError("passlib is required for password verification in production")
+    return pwd_context.verify(plain, hashed)
+
+
+def hash_password(plain: str) -> str:
+    """Hash a plaintext password for storage (SRS NFR-S2)."""
+    if not HAS_PASSLIB:
+        raise RuntimeError("passlib is required for password hashing in production")
+    return pwd_context.hash(plain)
+
+
+def authenticate_user(username: str, password: str) -> Optional[User]:
+    """
+    Authenticate a user against the database (SRS FR-3.8.5).
+
+    Looks up the ``users`` table by username, verifies the bcrypt password
+    hash, and returns a :class:`User` with scopes sourced from the DB row
+    (not hardcoded). Returns ``None`` on any failure.
+
+    Falls back to a development-only path when no database is configured
+    (ENVIRONMENT=development), preserving local-dev ergonomics without
+    weakening production security.
+    """
+    # Production path: query the users table
+    try:
+        from database import SessionLocal
+        from models import User as UserModel
+    except ImportError:
+        logger.warning("Database models not importable — auth will use dev fallback")
+        return _dev_authenticate(username, password)
+
+    try:
+        db = SessionLocal()
+        row = db.query(UserModel).filter(UserModel.username == username).first()
+        if row is None:
+            return None
+        if not verify_password(password, row.password_hash):
+            return None
+        return User(
+            username=row.username,
+            email=row.email,
+            role=row.role,
+            scopes=list(row.scopes) if row.scopes else [],
+        )
+    except Exception as e:
+        logger.error(f"Database auth error for user '{username}': {e}")
+        # Fall back to dev auth if DB is unavailable and we're in dev mode
+        return _dev_authenticate(username, password)
+    finally:
+        try:
+            db.close()
+        except Exception:
+            pass
+
+
+def _dev_authenticate(username: str, password: str) -> Optional[User]:
+    """
+    Development-only authentication fallback.
+
+    Only active when ENVIRONMENT=development. Accepts any non-empty
+    credentials and assigns scopes based on username, mirroring the
+    previous behavior so local dev and tests are not broken.
+    """
+    env = os.getenv("ENVIRONMENT", "production")
+    if env != "development":
+        return None
+    logger.warning(
+        f"Development auth fallback active for user '{username}' "
+        "(ENVIRONMENT=development). This MUST NOT be used in production."
+    )
+    # Dev-only scopes: broad enough to exercise all feature areas locally.
+    # Production relies on DB-backed user scopes, never this fallback.
+    scopes = [
+        "read", "write",
+        "plate_read", "plate_write",
+        "fhir_read", "fhir_write",
+        "simulation_read", "simulation_write",
+        "human_factors_read", "human_factors_write",
+        "audit_read", "audit_write",
+    ]
+    if username == "admin":
+        scopes.append("admin")
+    return User(
+        username=username,
+        email=f"{username}@biosync.local",
+        role="admin" if username == "admin" else "user",
+        scopes=scopes,
+    )
 
 
 class User(BaseModel):

@@ -3,14 +3,17 @@ import * as echarts from 'echarts'
 
 /**
  * Chart Provider Abstraction
- * Implements SRS FR-3.1.3 - Chart provider abstraction for swappable ECharts ↔ SciChart
- * 
- * Phase 0: ECharts implementation
- * Future: Add SciChart provider option
+ * Implements SRS FR-3.1.3 - Chart provider abstraction (ECharts-only)
+ *
+ * Approved deviation from SRS FR-3.1.3: SciChart backend removed.
+ * ECharts (Apache ECharts 5) is the sole rendering backend. The provider
+ * abstraction interface is retained for future swappability, but only
+ * the 'echarts' type is supported at runtime.
+ * See: REMAINING_WORK.md §0 (deviation log), DEVELOPMENT_PLAN.md §2
  */
 
 export interface ChartConfig {
-  type: 'echarts' | 'scichart'
+  type: 'echarts'
   options?: any
 }
 
@@ -39,28 +42,19 @@ export const ChartProvider: React.FC<{
 }> = ({ config = { type: 'echarts' }, children }) => {
   const chartInstance: ChartInstance = {
     createChart: (container: HTMLElement, options?: any) => {
-      if (config.type === 'echarts') {
-        const chart = echarts.init(container)
-        if (options) {
-          chart.setOption(options)
-        }
-        return chart
+      const chart = echarts.init(container)
+      if (options) {
+        chart.setOption(options)
       }
-      // Future: Add SciChart initialization
-      throw new Error(`Chart type ${config.type} not yet implemented`)
+      return chart
     },
     
     updateData: (chart: any, data: any) => {
-      if (config.type === 'echarts') {
-        chart.setOption(data)
-      }
-      // Future: Add SciChart update
+      chart.setOption(data)
     },
     
     dispose: (chart: any) => {
-      if (config.type === 'echarts') {
-        chart.dispose()
-      }
+      chart.dispose()
     }
   }
 

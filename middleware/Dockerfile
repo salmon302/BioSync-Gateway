@@ -27,4 +27,7 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')" || exit 1
 
 # Run the application
+# NOTE: For production with the Pulse Physiology Engine, use Dockerfile.pulse
+# which compiles PyPulse from C++ source via a multi-stage build.
+# See DEVELOPMENT_PLAN §7.1 and SRS §3.6.
 CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]

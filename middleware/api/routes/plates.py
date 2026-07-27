@@ -6,11 +6,15 @@ Implements SRS §3.2 - Microplate Editor
 import csv
 import io
 import json
+import uuid
 from fastapi import APIRouter, Depends, Query, UploadFile, File, HTTPException
 from fastapi.responses import StreamingResponse
 from typing import List, Optional
 
 from api.auth import get_current_user, require_scope
+from database import get_db
+from models import Plate, PlateWell, Observation
+from sqlalchemy.orm import Session
 
 router = APIRouter()
 
@@ -18,21 +22,150 @@ router = APIRouter()
 @router.post("/")
 async def create_plate(
     plate_data: dict,
+    db: Session = Depends(get_db),
     current_user=Depends(require_scope("plate_write"))
 ):
-    """Create a new microplate"""
-    # Placeholder
-    return {"status": "created", "plate_id": "placeholder"}
+    """Create a new microplate with its wells (SRS FR-3.2).
+
+    Accepts:
+        - plate_name, plate_type ('96-well'|'384-well'), barcode_set (optional)
+        - wells: list of {row, col, sample_id?, concentration?, volume?,
+          status?, observation_uid?, metadata?}
+
+    Persists the plate and wells, returning the new plate id/uid.
+    """
+    plate_name = plate_data.get("plate_name") or plate_data.get("name")
+    if not plate_name:
+        raise HTTPException(status_code=400, detail="plate_name is required")
+    plate_type = plate_data.get("plate_type")
+    if plate_type not in ("96-well", "384-well"):
+        raise HTTPException(
+            status_code=400,
+            detail="plate_type must be '96-well' or '384-well'",
+        )
+
+    cols = 12 if plate_type == "96-well" else 24
+    rows = 8 if plate_type == "96-well" else 16
+
+    plate = Plate(
+        plate_uid=str(uuid.uuid4()),
+        plate_name=plate_name,
+        plate_type=plate_type,
+        barcode_set=plate_data.get("barcode_set"),
+        created_by=getattr(current_user, "username", None),
+        meta=plate_data.get("metadata"),
+    )
+    db.add(plate)
+    db.flush()
+
+    wells_in = plate_data.get("wells", [])
+    for w in wells_in:
+        row = w.get("row")
+        col = w.get("col")
+        if row is None or col is None:
+            raise HTTPException(
+                status_code=400, detail="each well requires row and col"
+            )
+        if not (0 <= row < rows and 0 <= col < cols):
+            raise HTTPException(
+                status_code=400,
+                detail=f"well ({row},{col}) out of range for {plate_type}",
+            )
+        meta = dict(w.get("metadata") or {})
+        if w.get("observation_uid"):
+            meta["observation_uid"] = w["observation_uid"]
+        db.add(
+            PlateWell(
+                plate_id=plate.id,
+                well_row=row,
+                well_column=col,
+                well_index=row * cols + col,
+                sample_id=w.get("sample_id"),
+                concentration=w.get("concentration"),
+                volume=w.get("volume"),
+                status=w.get("status", "pending"),
+                meta=meta,
+            )
+        )
+
+    db.commit()
+    db.refresh(plate)
+    return {"status": "created", "plate_id": plate.id, "plate_uid": plate.plate_uid}
 
 
 @router.get("/{plate_id}")
 async def get_plate(
     plate_id: int,
+    db: Session = Depends(get_db),
     current_user=Depends(require_scope("plate_read"))
 ):
-    """Retrieve plate details"""
-    # Placeholder
-    return {"plate_id": plate_id, "status": "placeholder"}
+    """Retrieve plate details including wells (SRS FR-3.2 / FR-3.2.3).
+
+    Each well includes ``observationUid`` (from ``metadata['observation_uid']``)
+    so the frontend can fetch the associated FHIR Observation on click.
+    """
+    plate = db.query(Plate).filter(Plate.id == plate_id).first()
+    if not plate:
+        raise HTTPException(status_code=404, detail="plate not found")
+
+    wells = []
+    for w in db.query(PlateWell).filter(PlateWell.plate_id == plate.id).all():
+        meta = w.meta or {}
+        wells.append({
+            "id": w.id,
+            "row": w.well_row,
+            "col": w.well_column,
+            "well_index": w.well_index,
+            "sample_id": w.sample_id,
+            "concentration": w.concentration,
+            "volume": w.volume,
+            "status": w.status,
+            "observationUid": meta.get("observation_uid"),
+            "metadata": meta,
+        })
+
+    return {
+        "id": plate.id,
+        "plate_uid": str(plate.plate_uid),
+        "plate_name": plate.plate_name,
+        "plate_type": plate.plate_type,
+        "barcode_set": plate.barcode_set,
+        "created_at": plate.created_at.isoformat() if plate.created_at else None,
+        "wells": wells,
+    }
+
+
+@router.get("/{plate_id}/wells/{well_id}/observation")
+async def get_well_observation(
+    plate_id: int,
+    well_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_scope("plate_read"))
+):
+    """Resolve the FHIR Observation associated with a well (SRS FR-3.2.3).
+
+    Looks up the well's ``observation_uid`` and returns the stored FHIR
+    Observation resource. Returns 404 if the well or its Observation is absent.
+    """
+    well = (
+        db.query(PlateWell)
+        .filter(PlateWell.id == well_id, PlateWell.plate_id == plate_id)
+        .first()
+    )
+    if not well:
+        raise HTTPException(status_code=404, detail="well not found")
+    observation_uid = (well.metadata or {}).get("observation_uid")
+    if not observation_uid:
+        raise HTTPException(status_code=404, detail="well has no linked observation")
+
+    obs = (
+        db.query(Observation)
+        .filter(Observation.observation_uid == observation_uid)
+        .first()
+    )
+    if not obs:
+        raise HTTPException(status_code=404, detail="linked observation not found")
+    return obs.fhir_resource
 
 
 @router.post("/{plate_id}/validate-barcodes")

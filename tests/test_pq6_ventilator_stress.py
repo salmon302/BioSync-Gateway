@@ -1,10 +1,17 @@
 """
 PQ-6: Multi-Patient Ventilator Stress Test
 Implements SRS PQ-6 - Verify dashboard renders 10-patient ventilator stress at ≥ 55 fps
+
+NOTE: PyPulse is a required dependency. Tests skip when PyPulse is not
+installed (e.g., local dev without the multi-stage Docker build).
 """
 
 import pytest
 import time
+
+# Skip all tests if PyPulse is not available
+pytest.importorskip("PyPulse")
+
 from middleware.engine.pulse import SimulationManager, PatientConfig
 
 

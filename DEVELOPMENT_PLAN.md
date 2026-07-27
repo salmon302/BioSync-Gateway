@@ -27,7 +27,7 @@ BioSync-Gateway is a three-tier medical telemetry and laboratory informatics mid
 | Layer | Technology | Version Constraint |
 |:------|:-----------|:-------------------|
 | **Frontend** | React 18, TypeScript 5 | Node.js 20 LTS |
-| **Charting** | Apache ECharts 5 (open-source), SciChart.js (enterprise swap) | — |
+| **Charting** | Apache ECharts 5 (open-source) | ECharts-only; SciChart.js removed per approved deviation from FR-3.1.3 (see REMAINING_WORK.md §0) |
 | **Middleware** | FastAPI, Python | Python 3.11+ |
 | **Async** | asyncio, `ProcessPoolExecutor` | — |
 | **FHIR** | `fhir.resources` 7.x (Pydantic v2) | — |
@@ -89,7 +89,7 @@ BioSync-Gateway is a three-tier medical telemetry and laboratory informatics mid
 | **Trigger-level audit, not app-level** | Prevents admin script / raw SQL bypass (SRS C3) |
 | **Worker pools for Pulse, not async-inline** | Pulse C++ core is single-threaded per patient (SRS C1) |
 | **Both raw and filtered telemetry stored** | Raw = compliance source of truth; filtered = alarm evaluation (FR-3.5.3) |
-| **Chart provider abstraction** | Swappable ECharts ↔ SciChart without component rewrites (FR-3.1.3) |
+| **Chart provider abstraction** | ECharts-only rendering backend; abstraction interface retained for future swappability (deviation from FR-3.1.3, see REMAINING_WORK.md §0) |
 | **DB-generated timestamps only** | Prevents client clock spoofing for audit integrity (SRS D2) |
 
 ---
@@ -467,6 +467,8 @@ Original Mitigation: Reduce channel count or decimate data (lower fps).
 The Flaw: Simply dropping frames or arbitrarily "decimating" (skipping) data points in a medical telemetry stream is dangerous. You might skip over a transient pressure spike (e.g., a micro-occlusion in an arthroscopic pump) that the user needs to see.
 
 The Hardened Solution: Implement Largest Triangle Three Buckets (LTTB) downsampling on the FastAPI backend before pushing to WebSockets. LTTB is an algorithm specifically designed for time-series data that reduces the number of data points while perfectly preserving visual peaks and troughs (anomalies). This reduces the browser's WebGL rendering load without destroying clinical signal integrity.
+
+> **Risk #3 Note (2026-07-23):** SciChart.js has been removed from the tech stack per an approved deviation from SRS FR-3.1.3. Apache ECharts 5 (Canvas-based) is the sole charting backend. ECharts meets the 60 fps / 100k pts/s target for the telemetry dashboard when combined with LTTB downsampling. No new charting dependency is introduced. See `REMAINING_WORK.md` §0 (Approved Deviations) for the full rationale.
 
 4. WebSocket Scaling Beyond 500 Connections
 Original Mitigation: Horizontal scaling via Redis pub/sub.

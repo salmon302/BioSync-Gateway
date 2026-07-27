@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import { useHumanFactorsContext } from '../providers/human-factors-provider'
+import { fetchObservation, apiFetch } from '../utils/api'
 import './MicroplateEditor.css'
 
 /**
@@ -21,6 +22,7 @@ interface WellData {
   sampleId?: string
   concentration?: number
   observation?: any
+  observationUid?: string
 }
 
 interface PlateData {
@@ -39,6 +41,8 @@ const MicroplateEditor: React.FC = () => {
   const [selectionStart, setSelectionStart] = useState<{row: number, col: number} | null>(null)
   const [showObservation, setShowObservation] = useState(false)
   const [selectedObservation, setSelectedObservation] = useState<any>(null)
+  const [obsLoading, setObsLoading] = useState(false)
+  const [obsError, setObsError] = useState<string | null>(null)
   const [, setImportExportData] = useState<string>('')
   const [showBatchModal, setShowBatchModal] = useState(false)
   const [batchInput, setBatchInput] = useState('')
@@ -66,10 +70,34 @@ const MicroplateEditor: React.FC = () => {
       type: plateType,
       wells
     })
+
+    // Best-effort: load a persisted plate from the backend so that wells
+    // carry their observation_uid (FR-3.2.3). Falls back to locally
+    // generated data when no backend/plate is available.
+    ;(async () => {
+      try {
+        const plate = await apiFetch<any>('/plates/1')
+        setPlateData({
+          id: plate.id,
+          name: plate.plate_name,
+          type: plate.plate_type,
+          wells: (plate.wells || []).map((w: any) => ({
+            row: w.row,
+            col: w.col,
+            state: (w.status as WellData['state']) ?? 'empty',
+            sampleId: w.sample_id,
+            concentration: w.concentration,
+            observationUid: w.observationUid,
+          })),
+        })
+      } catch {
+        // No persisted plate yet — keep locally generated data.
+      }
+    })()
   }, [plateType])
 
   // Handle well click - SRS FR-3.2.3
-  const handleWellClick = useCallback((row: number, col: number) => {
+  const handleWellClick = useCallback(async (row: number, col: number) => {
     if (!plateData) return
 
     const well = plateData.wells.find(w => w.row === row && w.col === col)
@@ -81,9 +109,26 @@ const MicroplateEditor: React.FC = () => {
       wellClickStartTime.current = 0
     }
 
-    if (well.state !== 'empty' && well.observation) {
-      setSelectedObservation(well.observation)
-      setShowObservation(true)
+    // FR-3.2.3 — reveal underlying FHIR Observation for the sample.
+    // Prefer a live fetch by UID (works once plate/well data links an
+    // Observation UID); fall back to any preloaded observation payload.
+    if (well.state !== 'empty') {
+      if (well.observationUid) {
+        setObsLoading(true)
+        setObsError(null)
+        try {
+          const obs = await fetchObservation(well.observationUid)
+          setSelectedObservation(obs)
+          setShowObservation(true)
+        } catch (err: any) {
+          setObsError(err?.message ?? 'Failed to load observation')
+        } finally {
+          setObsLoading(false)
+        }
+      } else if (well.observation) {
+        setSelectedObservation(well.observation)
+        setShowObservation(true)
+      }
     }
 
     // Toggle selection
@@ -352,6 +397,68 @@ const MicroplateEditor: React.FC = () => {
     URL.revokeObjectURL(url)
   }, [plateData])
 
+  // Import JSON - SRS FR-3.2.5 (symmetric with JSON export)
+  const handleImportJSON = useCallback(() => {
+    const input = document.createElement('input')
+    input.type = 'file'
+    input.accept = '.json,application/json'
+    input.onchange = (e: any) => {
+      const file = e.target.files[0]
+      if (!file) return
+
+      const reader = new FileReader()
+      reader.onload = (event) => {
+        try {
+          const text = event.target?.result as string
+          const parsed: PlateData = JSON.parse(text)
+
+          // Validate basic structure
+          if (!parsed.wells || !Array.isArray(parsed.wells)) {
+            alert('Invalid JSON: missing "wells" array.')
+            return
+          }
+
+          setPlateData(parsed)
+          trackInteraction('json_import', 'MicroplateEditor', { wellsImported: parsed.wells.length })
+        } catch (err) {
+          alert('Failed to parse JSON file. Please check the file format.')
+        }
+      }
+      reader.readAsText(file)
+    }
+    input.click()
+  }, [trackInteraction])
+
+  // Export CSV - SRS FR-3.2.5 (symmetric with CSV import)
+  const handleExportCSV = useCallback(() => {
+    if (!plateData) return
+
+    const headers = ['row', 'col', 'state', 'sampleId', 'concentration']
+    const lines = [headers.join(',')]
+
+    for (const well of plateData.wells) {
+      const row = [
+        well.row,
+        well.col,
+        well.state,
+        well.sampleId ?? '',
+        well.concentration ?? ''
+      ]
+      lines.push(row.join(','))
+    }
+
+    const csv = lines.join('\n')
+    const blob = new Blob([csv], { type: 'text/csv' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `plate-${plateData.id}.csv`
+    a.click()
+    URL.revokeObjectURL(url)
+
+    trackInteraction('csv_export', 'MicroplateEditor', { wellsExported: plateData.wells.length })
+  }, [plateData, trackInteraction])
+
   // Render wells
   const renderWells = () => {
     if (!plateData) return null
@@ -409,6 +516,8 @@ const MicroplateEditor: React.FC = () => {
           </select>
         </label>
         <button onClick={handleImportCSV}>Import CSV</button>
+        <button onClick={handleExportCSV}>Export CSV</button>
+        <button onClick={handleImportJSON}>Import JSON</button>
         <button onClick={handleExportJSON}>Export JSON</button>
         <button onClick={() => setShowBatchModal(true)} disabled={selectedWells.size === 0}>Batch Select</button>
         <button disabled={selectedWells.size === 0}>Clear Selection</button>
@@ -440,6 +549,22 @@ const MicroplateEditor: React.FC = () => {
             <p><strong>Value:</strong> {selectedObservation.valueQuantity?.value} {selectedObservation.valueQuantity?.unit}</p>
             <p><strong>Timestamp:</strong> {selectedObservation.effectiveDateTime}</p>
           </div>
+        </div>
+      )}
+
+      {/* Observation fetch in progress (FR-3.2.3 live fetch) */}
+      {obsLoading && (
+        <div className="observation-overlay" role="status" aria-live="polite">
+          <p>Loading FHIR Observation…</p>
+        </div>
+      )}
+
+      {/* Observation fetch error (FR-3.2.3) */}
+      {obsError && (
+        <div className="observation-overlay" role="alert">
+          <button className="close-btn" onClick={() => setObsError(null)}>×</button>
+          <h3>Observation Load Error</h3>
+          <p className="obs-error">{obsError}</p>
         </div>
       )}
 

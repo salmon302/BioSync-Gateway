@@ -9,9 +9,15 @@ configurable intervals using the Pulse Data Request Manager, including:
 - ArterialOxygenPartialPressure_mmHg
 - OxygenSaturation
 - RespirationRate
+
+NOTE: PyPulse is a required dependency. Tests skip when PyPulse is not
+installed (e.g., local dev without the multi-stage Docker build).
 """
 
 import pytest
+
+# Skip all tests if PyPulse is not available
+pytest.importorskip("PyPulse")
 
 
 class TestPulseDataExtraction:

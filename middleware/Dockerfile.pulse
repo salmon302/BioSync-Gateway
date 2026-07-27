@@ -1,0 +1,89 @@
+# Multi-Stage Dockerfile for BioSync-Gateway Middleware
+# Implements SRS §3.6 — Kitware Pulse Physiology Engine integration
+# Implements DEVELOPMENT_PLAN §7.1 Risk #1: control compilation environment
+#
+# Stage 1 (Builder): Compile Kitware Pulse from C++ source
+# Stage 2 (Production): Lightweight runtime with compiled PyPulse.so
+#
+# This eliminates target OS incompatibility for the PyPulse binary.
+
+# =============================================================================
+# Stage 1: Builder — compile Pulse Engine from source
+# =============================================================================
+FROM ubuntu:22.04 AS pulse-builder
+
+ARG PULSE_VERSION=3.0.0
+ARG DEBIAN_FRONTEND=noninteractive
+
+# Install build dependencies
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    cmake \
+    git \
+    python3-dev \
+    python3-pip \
+    python3-venv \
+    libboost-all-dev \
+    libprotobuf-dev \
+    protobuf-compiler \
+    libeigen3-dev \
+    libcurl4-openssl-dev \
+    zlib1g-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Clone and build Kitware Pulse Physiology Engine
+WORKDIR /build
+RUN git clone --depth 1 --branch v${PULSE_VERSION} https://gitlab.kitware.com/physiology/engine.git pulse \
+    && mkdir pulse/build && cd pulse/build \
+    && cmake .. \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DPULSE_INSTALL=ON \
+        -DPULSE_PYTHON_BINDINGS=ON \
+        -DPYBIND11_FINDPYTHON=ON \
+    && make -j$(nproc) \
+    && make install
+
+# =============================================================================
+# Stage 2: Production runtime
+# =============================================================================
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install runtime system dependencies
+RUN apt-get update && apt-get install -y \
+    gcc \
+    libboost-filesystem1.104.0 \
+    libboost-system1.104.0 \
+    libprotobuf23 \
+    protobuf-compiler \
+    libcurl4 \
+    zlib1g \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy Python dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy compiled PyPulse from builder stage
+COPY --from=pulse-builder /usr/local/lib/python*/site-packages/PyPulse* /usr/local/lib/python*/site-packages/
+COPY --from=pulse-builder /usr/local/lib/python*/site-packages/pulse* /usr/local/lib/python*/site-packages/
+COPY --from=pulse-builder /usr/local/lib/libPulse.so* /usr/local/lib/
+
+# Copy application code
+COPY . .
+
+# Create non-root user
+RUN useradd -m -u 1000 biosync && chown -R biosync:biosync /app
+USER biosync
+
+# Verify PyPulse import at build time (IQ-4)
+RUN python -c "import PyPulse; print('PyPulse OK')"
+
+EXPOSE 8000
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')" || exit 1
+
+CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]

@@ -5,11 +5,17 @@ Implements SRS FR-3.6.2 — Async Delegation
 Verifies that Pulse simulation time-step computations are delegated to
 asyncio worker threads or ProcessPoolExecutor to prevent blocking the
 FastAPI event loop.
+
+NOTE: PyPulse is a required dependency. Tests skip when PyPulse is not
+installed (e.g., local dev without the multi-stage Docker build).
 """
 
 import pytest
 import asyncio
 from concurrent.futures import ProcessPoolExecutor
+
+# Skip all tests if PyPulse is not available
+pytest.importorskip("PyPulse")
 
 
 # Module-level function for pickling (required by ProcessPoolExecutor)

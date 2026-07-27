@@ -3,16 +3,20 @@
 Seed barcode_indices with Illumina TruSeq/Nextera UDI dictionary.
 Implements SRS §3.3 - Barcode Multiplexing Engine.
 
-Reconciled against database/migrations/004-seed-barcodes.sql.
-Note: the raw SQL redefines barcode_indices with (barcode_id, sequence,
-sequence_length). Since Alembic 0001 already created the canonical schema
-(index_name, index_sequence, barcode_set, kit_type, created_at), this migration
-seeds using the canonical column names.
+Seeds from a version-controlled JSON manifest
+(database/seeds/illumina_udis_v1.0.0.json) containing authentic
+8-base and 10-base Illumina UDI sequences validated for minimum
+pairwise Hamming distance >= 3 (SRS FR-3.3.4).
+
+The manifest is the source of truth; this migration loads it into the
+barcode_indices table at deploy time.
 
 Revision ID: 0003
 Revises: 0002_extensions_triggers
 Create Date: 2026-07-16
 """
+import json
+import os
 from alembic import op
 from sqlalchemy import text
 
@@ -22,83 +26,39 @@ down_revision = '0002_extensions_triggers'
 branch_labels = None
 depends_on = None
 
+MANIFEST_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))),
+    'database', 'seeds', 'illumina_udis_v1.0.0.json'
+)
+
+
+def _load_manifest():
+    """Load the UDI manifest JSON, returning the barcode_sets dict."""
+    with open(MANIFEST_PATH, 'r') as f:
+        manifest = json.load(f)
+    return manifest['barcode_sets']
+
 
 def upgrade():
-    # Seed data: Illumina TruSeq HT Barcodes (i7 + i5 indices)
-    # Using canonical schema: index_name, index_sequence, barcode_set, kit_type, created_at
-    seed_rows = [
-        # TruSeq HT Index Set A (i7 indices)
-        ("HT1",  "ATCACG",   "TruSeq", "TruSeq"),
-        ("HT2",  "CGATGT",   "TruSeq", "TruSeq"),
-        ("HT3",  "TTAGGC",   "TruSeq", "TruSeq"),
-        ("HT4",  "TGACCA",   "TruSeq", "TruSeq"),
-        ("HT5",  "ACAGTG",   "TruSeq", "TruSeq"),
-        ("HT6",  "GCCAAT",   "TruSeq", "TruSeq"),
-        ("HT7",  "CAGATC",   "TruSeq", "TruSeq"),
-        ("HT8",  "ACTTGA",   "TruSeq", "TruSeq"),
-        ("HT9",  "GATCAG",   "TruSeq", "TruSeq"),
-        ("HT10", "TAGCTT",   "TruSeq", "TruSeq"),
-        ("HT11", "GGCTAC",   "TruSeq", "TruSeq"),
-        ("HT12", "CTTGTA",   "TruSeq", "TruSeq"),
-        # Additional TruSeq indices (i5 indices for dual indexing)
-        ("HT13", "AGTCAA",   "TruSeq", "TruSeq"),
-        ("HT14", "AGTTCC",   "TruSeq", "TruSeq"),
-        ("HT15", "ATGTCA",   "TruSeq", "TruSeq"),
-        ("HT16", "CCGTCC",   "TruSeq", "TruSeq"),
-        ("HT17", "GTAGAG",   "TruSeq", "TruSeq"),
-        ("HT18", "GTCCGC",   "TruSeq", "TruSeq"),
-        ("HT19", "GTGAAA",   "TruSeq", "TruSeq"),
-        ("HT20", "GTGGCC",   "TruSeq", "TruSeq"),
-        ("HT21", "GTTTCG",   "TruSeq", "TruSeq"),
-        ("HT22", "CGTACG",   "TruSeq", "TruSeq"),
-        ("HT23", "GAGTGG",   "TruSeq", "TruSeq"),
-        ("HT24", "GGTAGC",   "TruSeq", "TruSeq"),
-        # Nextera Index Set (8-base)
-        ("NX1",  "GCGTAAGA", "Nextera", "Nextera"),
-        ("NX2",  "CGATCAGA", "Nextera", "Nextera"),
-        ("NX3",  "AAGCGTAG", "Nextera", "Nextera"),
-        ("NX4",  "GTTCAGGA", "Nextera", "Nextera"),
-        # Nextera 8-base UDI sequences (SRS FR-3.3.4)
-        ("NX8-1",  "GCGTAAGA", "Nextera-8base", "Nextera"),
-        ("NX8-2",  "CGATCAGA", "Nextera-8base", "Nextera"),
-        ("NX8-3",  "AAGCGTAG", "Nextera-8base", "Nextera"),
-        ("NX8-4",  "GTTCAGGA", "Nextera-8base", "Nextera"),
-        ("NX8-5",  "TCCGTAGA", "Nextera-8base", "Nextera"),
-        ("NX8-6",  "CTCGATAG", "Nextera-8base", "Nextera"),
-        ("NX8-7",  "GTCGATCA", "Nextera-8base", "Nextera"),
-        ("NX8-8",  "ATCGATCA", "Nextera-8base", "Nextera"),
-        ("NX8-9",  "CGATCGAT", "Nextera-8base", "Nextera"),
-        ("NX8-10", "GATCGATC", "Nextera-8base", "Nextera"),
-        ("NX8-11", "TCGATCGA", "Nextera-8base", "Nextera"),
-        ("NX8-12", "CGATCGAT", "Nextera-8base", "Nextera"),
-        # Nextera 10-base UDI sequences (SRS FR-3.3.4)
-        ("NX10-1",  "GCGTAAGAAA", "Nextera-10base", "Nextera"),
-        ("NX10-2",  "CGATCAGAAA", "Nextera-10base", "Nextera"),
-        ("NX10-3",  "AAGCGTAGAA", "Nextera-10base", "Nextera"),
-        ("NX10-4",  "GTTCAGGAAA", "Nextera-10base", "Nextera"),
-        ("NX10-5",  "TCCGTAGAAA", "Nextera-10base", "Nextera"),
-        ("NX10-6",  "CTCGATAGAA", "Nextera-10base", "Nextera"),
-        ("NX10-7",  "GTCGATCAAA", "Nextera-10base", "Nextera"),
-        ("NX10-8",  "ATCGATCAAA", "Nextera-10base", "Nextera"),
-        ("NX10-9",  "CGATCGATAA", "Nextera-10base", "Nextera"),
-        ("NX10-10", "GATCGATCAA", "Nextera-10base", "Nextera"),
-        ("NX10-11", "TCGATCGAAA", "Nextera-10base", "Nextera"),
-        ("NX10-12", "CGATCGATAA", "Nextera-10base", "Nextera"),
-    ]
-
-    # Seed barcodes via connection for clarity and idempotency
     conn = op.get_bind()
-    for row in seed_rows:
-        conn.execute(text("""
-            INSERT INTO barcode_indices (index_name, index_sequence, barcode_set, kit_type, created_at)
-            VALUES (:index_name, :index_sequence, :barcode_set, :kit_type, NOW())
-            ON CONFLICT (index_sequence) DO NOTHING
-        """), {
-            "index_name": row[0],
-            "index_sequence": row[1],
-            "barcode_set": row[2],
-            "kit_type": row[3],
-        })
+
+    # Load manifest and seed barcode_indices
+    barcode_sets = _load_manifest()
+
+    for set_name, set_data in barcode_sets.items():
+        kit_type = set_data['kit_type']
+        seq_len = set_data['sequence_length']
+        for index_name, sequence in set_data['indices'].items():
+            conn.execute(text("""
+                INSERT INTO barcode_indices (index_name, index_sequence, barcode_set, kit_type, created_at)
+                VALUES (:index_name, :index_sequence, :barcode_set, :kit_type, NOW())
+                ON CONFLICT (index_sequence) DO NOTHING
+            """), {
+                "index_name": index_name,
+                "index_sequence": sequence,
+                "barcode_set": set_name,
+                "kit_type": kit_type,
+            })
 
     # Create analysis view for barcode Hamming distance verification
     op.execute(text("""

@@ -17,6 +17,8 @@ CREATE TABLE IF NOT EXISTS audit_log (
     previous_hash VARCHAR(64),
     current_hash VARCHAR(64) NOT NULL,
     data JSONB NOT NULL,
+    previous_state JSONB,
+    reason TEXT,
     CONSTRAINT audit_log_current_hash_check CHECK (current_hash ~ '^[a-f0-9]{64}$')
 );
 
@@ -212,6 +214,63 @@ CREATE INDEX idx_external_cache_key ON external_cache(cache_key);
 CREATE INDEX idx_external_cache_expires ON external_cache(expires_at);
 
 -- ============================================
+-- Table 12: patients
+-- Simulated patient demographics (synthetic, no PHI) (SRS §6.1)
+-- ============================================
+CREATE TABLE IF NOT EXISTS patients (
+    id SERIAL PRIMARY KEY,
+    patient_uid UUID DEFAULT uuid_generate_v4() UNIQUE NOT NULL,
+    synthetic_id VARCHAR(255) UNIQUE NOT NULL,
+    demographics JSONB,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL
+);
+
+CREATE INDEX idx_patients_uid ON patients(patient_uid);
+CREATE INDEX idx_patients_synthetic ON patients(synthetic_id);
+
+-- ============================================
+-- Table 13: device_metrics
+-- FHIR DeviceMetric resources (SRS §6.1)
+-- ============================================
+CREATE TABLE IF NOT EXISTS device_metrics (
+    id SERIAL PRIMARY KEY,
+    device_id INTEGER REFERENCES devices(id),
+    metric_name VARCHAR(255) NOT NULL,
+    category VARCHAR(50),
+    operational_status VARCHAR(50),
+    unit VARCHAR(50),
+    measurement_period FLOAT,
+    fhir_resource JSONB NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL
+);
+
+CREATE INDEX idx_device_metrics_device ON device_metrics(device_id);
+CREATE INDEX idx_device_metrics_name ON device_metrics(metric_name);
+
+-- ============================================
+-- Table 14: dilution_worklists
+-- Automated dilution manifests (SRS §6.1)
+-- ============================================
+CREATE TABLE IF NOT EXISTS dilution_worklists (
+    id SERIAL PRIMARY KEY,
+    plate_id INTEGER REFERENCES plates(id),
+    sample_id VARCHAR(255) NOT NULL,
+    initial_concentration FLOAT NOT NULL,
+    initial_unit VARCHAR(50) NOT NULL,
+    target_concentration FLOAT NOT NULL,
+    target_unit VARCHAR(50) NOT NULL,
+    steps JSONB NOT NULL,
+    total_volume_needed FLOAT,
+    molar_mass FLOAT,
+    warning_code VARCHAR(100),
+    is_finalized BOOLEAN DEFAULT FALSE NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL
+);
+
+CREATE INDEX idx_dilution_worklists_plate ON dilution_worklists(plate_id);
+CREATE INDEX idx_dilution_worklists_sample ON dilution_worklists(sample_id);
+
+-- ============================================
 -- Trigger Functions for Append-Only Enforcement
 -- ============================================
 
@@ -272,9 +331,54 @@ CREATE TRIGGER plate_wells_prevent_delete
     BEFORE DELETE ON plate_wells
     FOR EACH ROW EXECUTE FUNCTION prevent_delete();
 
+-- Apply to barcode_indices (read-only after bulk load)
+CREATE TRIGGER barcode_indices_prevent_update
+    BEFORE UPDATE ON barcode_indices
+    FOR EACH ROW EXECUTE FUNCTION prevent_update();
+
+CREATE TRIGGER barcode_indices_prevent_delete
+    BEFORE DELETE ON barcode_indices
+    FOR EACH ROW EXECUTE FUNCTION prevent_delete();
+
+-- Apply to human_factors_metrics (append-only)
+CREATE TRIGGER human_factors_metrics_prevent_update
+    BEFORE UPDATE ON human_factors_metrics
+    FOR EACH ROW EXECUTE FUNCTION prevent_update();
+
+CREATE TRIGGER human_factors_metrics_prevent_delete
+    BEFORE DELETE ON human_factors_metrics
+    FOR EACH ROW EXECUTE FUNCTION prevent_delete();
+
+-- Apply to patients (append-only after creation)
+CREATE TRIGGER patients_prevent_update
+    BEFORE UPDATE ON patients
+    FOR EACH ROW EXECUTE FUNCTION prevent_update();
+
+CREATE TRIGGER patients_prevent_delete
+    BEFORE DELETE ON patients
+    FOR EACH ROW EXECUTE FUNCTION prevent_delete();
+
+-- Apply to device_metrics (read-only after insertion)
+CREATE TRIGGER device_metrics_prevent_update
+    BEFORE UPDATE ON device_metrics
+    FOR EACH ROW EXECUTE FUNCTION prevent_update();
+
+CREATE TRIGGER device_metrics_prevent_delete
+    BEFORE DELETE ON device_metrics
+    FOR EACH ROW EXECUTE FUNCTION prevent_delete();
+
+-- Apply to dilution_worklists (append-only after finalization)
+CREATE TRIGGER dilution_worklists_prevent_update
+    BEFORE UPDATE ON dilution_worklists
+    FOR EACH ROW EXECUTE FUNCTION prevent_update();
+
+CREATE TRIGGER dilution_worklists_prevent_delete
+    BEFORE DELETE ON dilution_worklists
+    FOR EACH ROW EXECUTE FUNCTION prevent_delete();
+
 -- ============================================
 -- Hash Chain Function
--- SRS FR-3.8.3: Cryptographic hash chain
+-- SRS FR-3.8.3: H_i = SHA256(H_{i-1} || T_i || U_i || D_prev || D_new || R_i)
 -- ============================================
 
 CREATE OR REPLACE FUNCTION compute_hash_chain()
@@ -283,7 +387,7 @@ DECLARE
     prev_hash VARCHAR(64);
     concat_data TEXT;
 BEGIN
-    -- Get the previous hash from the last row in audit_log
+    -- Get the previous hash from the last row in audit_log (H_{i-1})
     SELECT current_hash INTO prev_hash
     FROM audit_log
     ORDER BY id DESC
@@ -294,14 +398,14 @@ BEGIN
         prev_hash := '0000000000000000000000000000000000000000000000000000000000000000';
     END IF;
     
-    -- Concatenate data for hashing
+    -- Concatenate per SRS FR-3.8.3:
+    --   H_{i-1} || T_i || U_i || D_prev || D_new || R_i
     concat_data := prev_hash || 
-                   NEW.table_name || 
-                   NEW.operation || 
-                   NEW.record_id::TEXT || 
-                   NEW.timestamp::TEXT || 
-                   COALESCE(NEW.user_id, '') || 
-                   NEW.data::TEXT;
+                   COALESCE(NEW.timestamp::TEXT, CURRENT_TIMESTAMP::TEXT) ||
+                   COALESCE(NEW.user_id, '') ||
+                   COALESCE(NEW.previous_state::TEXT, '{}') ||
+                   COALESCE(NEW.data::TEXT, '{}') ||
+                   COALESCE(NEW.reason, '');
     
     -- Compute SHA-256 hash
     NEW.previous_hash := prev_hash;
@@ -328,10 +432,8 @@ END;
 $$ LANGUAGE plpgsql;
 
 -- Apply to tables with updated_at column
-CREATE TRIGGER update_devices_updated_at
-    BEFORE UPDATE ON devices
-    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
-
+-- Note: devices is read-only after insertion (SRS §6.1), so its
+-- update_updated_at trigger is intentionally omitted to avoid contradiction.
 CREATE TRIGGER update_simulations_updated_at
     BEFORE UPDATE ON simulations
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
@@ -350,3 +452,6 @@ COMMENT ON TABLE telemetry_sessions IS 'WebSocket telemetry streaming sessions';
 COMMENT ON TABLE users IS 'User accounts for JWT authentication';
 COMMENT ON TABLE human_factors_metrics IS 'uFMEA data collection for human factors analysis';
 COMMENT ON TABLE external_cache IS 'Cached external API responses (AccessGUDID, ClinVar)';
+COMMENT ON TABLE patients IS 'Simulated patient demographics (synthetic, no PHI)';
+COMMENT ON TABLE device_metrics IS 'FHIR DeviceMetric resources';
+COMMENT ON TABLE dilution_worklists IS 'Automated dilution manifests';

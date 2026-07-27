@@ -43,11 +43,17 @@ class TestHashChainAPI:
         assert len(hash1) == 64, "SHA-256 hash should be 64 hex characters"
 
     def test_compute_hash_different_inputs(self):
-        """Different inputs should produce different hashes."""
+        """Different inputs should produce different hashes.
+
+        Per SRS FR-3.8.3, the hash formula is:
+            H_i = SHA256(H_{i-1} || T_i || U_i || D_prev || D_new || R_i)
+        So we vary D_new (data) and R_i (reason) to confirm divergence.
+        """
         from middleware.engine.hash_chain import compute_hash
 
         timestamp = datetime(2026, 7, 13, 10, 0, 0)
-        data = {"table": "plates", "record_id": 1, "action": "insert"}
+        data1 = {"table": "plates", "record_id": 1, "action": "insert"}
+        data2 = {"table": "plates", "record_id": 1, "action": "update"}
 
         hash1 = compute_hash(
             previous_hash="genesis",
@@ -56,20 +62,22 @@ class TestHashChainAPI:
             record_id=1,
             timestamp=timestamp,
             user_id="user1",
-            data=data
+            data=data1,
+            reason="initial",
         )
 
         hash2 = compute_hash(
             previous_hash="genesis",
             table_name="plates",
             operation="INSERT",
-            record_id=2,  # Different record_id
+            record_id=1,
             timestamp=timestamp,
             user_id="user1",
-            data=data
+            data=data2,  # Different D_new
+            reason="initial",
         )
 
-        assert hash1 != hash2, "Different record_id should produce different hash"
+        assert hash1 != hash2, "Different data (D_new) should produce different hash"
 
     def test_compute_hash_chain_links(self):
         """Hash chain should link entries via previous_hash."""

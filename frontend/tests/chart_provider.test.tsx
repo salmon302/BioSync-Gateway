@@ -94,8 +94,4 @@ describe('ChartProvider', () => {
     )
     spy.mockRestore()
   })
-
-  // Skipped: scichart error propagates as uncaught in jsdom click handler.
-  // The provider correctly throws for unsupported types — tested manually.
-  it.skip('throws for unsupported chart type', () => {})
 })

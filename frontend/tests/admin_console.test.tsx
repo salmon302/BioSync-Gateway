@@ -1,6 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
-import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import AdminConsole from '../src/pages/AdminConsole'
 
@@ -120,9 +119,6 @@ describe('AdminConsole', () => {
   it('has token expiry number input with default 24', async () => {
     renderConsole()
     await waitFor(() => {
-      // Find the number input by its label proximity
-      const inputs = screen.getAllByRole('spinbutton')
-      // There's one spinbutton: the concurrent patients input
       // The token expiry input has type=number but is wrapped in a label without htmlFor
       const tokenInput = screen.getByDisplayValue('24')
       expect(tokenInput).toBeInTheDocument()

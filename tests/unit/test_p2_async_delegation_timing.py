@@ -4,12 +4,18 @@ Implements SRS FR-3.6.2 / Constraint C1
 
 Verifies that Pulse simulation step operations are delegated to
 ProcessPoolExecutor and do not block the asyncio event loop.
+
+NOTE: PyPulse is a required dependency. Tests skip when PyPulse is not
+installed (e.g., local dev without the multi-stage Docker build).
 """
 
 import pytest
 import asyncio
 import time
 from concurrent.futures import ProcessPoolExecutor
+
+# Skip all tests if PyPulse is not available
+pytest.importorskip("PyPulse")
 
 
 class TestPulseAsyncDelegationTiming:

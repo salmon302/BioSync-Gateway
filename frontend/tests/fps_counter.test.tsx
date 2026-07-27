@@ -11,8 +11,8 @@ const rafMock = vi.fn((cb) => {
 const cafMock = vi.fn()
 
 beforeAll(() => {
-  ;(globalThis as any).requestAnimationFrame = rafMock
-  ;(globalThis as any).cancelAnimationFrame = cafMock
+  (globalThis as any).requestAnimationFrame = rafMock;
+  (globalThis as any).cancelAnimationFrame = cafMock;
 })
 
 afterAll(() => {

@@ -1,10 +1,17 @@
 """
 PQ-2: Concurrent Simulations
 Implements SRS PQ-2 - Verify 10 concurrent simulations
+
+NOTE: PyPulse is a required dependency. Tests skip when PyPulse is not
+installed (e.g., local dev without the multi-stage Docker build).
 """
 
 import pytest
 import time
+
+# Skip all tests if PyPulse is not available
+pytest.importorskip("PyPulse")
+
 from middleware.engine.pulse import SimulationManager, PatientConfig
 
 

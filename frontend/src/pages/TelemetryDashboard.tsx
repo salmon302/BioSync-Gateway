@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState, useCallback } from 'react'
 import { useChart } from '../providers/chart-provider'
 import { useHumanFactorsContext } from '../providers/human-factors-provider'
 import { useWebSocket } from '../hooks/useWebSocket'
+import { downsampleTelemetry } from '../utils/lttb'
 import FPSCounter from '../components/TelemetryDashboard/FPSCounter'
 import './TelemetryDashboard.css'
 
@@ -36,11 +37,15 @@ const TelemetryDashboard: React.FC = () => {
   const dataBuffer = useRef<TelemetryDataPoint[]>([])
 
   // Alarm thresholds (SRS FR-3.1.5)
+  // These MUST mirror backend ALARM_THRESHOLDS in
+  // middleware/api/routes/telemetry.py so the client visualization agrees
+  // with the server-side EMA-filtered alarm evaluation (FR-3.5.4).
+  // Keep the two sources in lock-step; divergence is tracked as gap G6.
   const alarmThresholds = useRef({
-    pressure: { low: 60, high: 140 },
-    flow: { low: 1, high: 80 },
-    hr: { low: 40, high: 160 },
-    spo2: { low: 88, high: 100 }
+    pressure: { low: 60, high: 150 },
+    flow: { low: -60, high: 60 },
+    hr: { low: 50, high: 120 },
+    spo2: { low: 90, high: 100 }
   })
 
   // Track active alarms per channel
@@ -48,6 +53,12 @@ const TelemetryDashboard: React.FC = () => {
   const [activeAlarms, setActiveAlarms] = useState<string[]>([])
   // Track acknowledged alarms (cleared by user; resets when alarm condition clears)
   const [acknowledgedAlarms, setAcknowledgedAlarms] = useState<Set<string>>(new Set())
+
+  // Maximum data points to retain in the rolling buffer (SRS FR-3.1.2)
+  // The buffer is large; LTTB downsampling is applied before chart rendering
+  // to maintain 60 fps at 100k pts/s.
+  const MAX_BUFFER_SIZE = 10000
+  const CHART_POINT_THRESHOLD = 2000
 
   const checkAlarms = (dp: TelemetryDataPoint): boolean => {
     let anyAlarm = false
@@ -130,12 +141,14 @@ const TelemetryDashboard: React.FC = () => {
           // Check alarm thresholds (SRS FR-3.1.5)
           dataPoint.alarm = checkAlarms(dataPoint)
 
-          dataBuffer.current = [...dataBuffer.current, dataPoint].slice(-1000)
+          // Rolling buffer with larger cap (SRS FR-3.1.2)
+          dataBuffer.current = [...dataBuffer.current, dataPoint].slice(-MAX_BUFFER_SIZE)
           setDataPoints([...dataBuffer.current])
           
-          // Update chart
+          // Update chart with LTTB-downsampled data for 60 fps rendering
           if (chartInstance.current) {
-            updateChartData(chartInstance.current, dataBuffer.current)
+            const downsampled = downsampleTelemetry(dataBuffer.current, CHART_POINT_THRESHOLD)
+            updateChartData(chartInstance.current, downsampled)
           }
         }
       }
@@ -372,7 +385,9 @@ const TelemetryDashboard: React.FC = () => {
         {activeAlarms.length > 0 && (
           <div className="alarm-banner">
             <p className="alarm-indicator">
-              ⚠ Alarm active: {activeAlarms.join(', ')}
+              {activeAlarms.some(ch => !acknowledgedAlarms.has(ch))
+                ? `Alarm active: ${activeAlarms.filter(ch => !acknowledgedAlarms.has(ch)).join(', ')}`
+                : `Alarm acknowledged: ${activeAlarms.join(', ')}`}
             </p>
             <button
               className="ack-button"

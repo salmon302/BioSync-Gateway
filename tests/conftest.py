@@ -75,6 +75,9 @@ def pytest_configure(config):
     config.addinivalue_line("markers", "db: database-level tests")
     config.addinivalue_line("markers", "hf: human factors tests")
     config.addinivalue_line("markers", "slow: slow-running tests")
+    config.addinivalue_line("markers", "pq1: PQ-1 k6 real-load (replaces CI smoke-only import test)")
+    config.addinivalue_line("markers", "pq3: PQ-3 1M-row hash-chain verification")
+    config.addinivalue_line("markers", "pq4: PQ-4 24h ingestion soak (deferred)")
 
 
 # =============================================================================
@@ -108,7 +111,8 @@ def sample_jwt_token() -> str:
         "sub": "test-user",
         "role": "admin",
         "scopes": ["plate_read", "plate_write", "fhir_read", "fhir_write",
-                    "audit_read", "telemetry_write", "simulation_write"],
+                   "audit_read", "telemetry_write", "simulation_write",
+                   "human_factors_read", "human_factors_write"],
         "iat": int(time.time()),
         "exp": int(time.time()) + 3600  # 1 hour expiry
     }
@@ -123,7 +127,8 @@ def admin_jwt_token() -> str:
         "sub": "admin-user",
         "role": "admin",
         "scopes": ["plate_read", "plate_write", "fhir_read", "fhir_write",
-                    "audit_read", "telemetry_write", "simulation_write"],
+                   "audit_read", "telemetry_write", "simulation_write",
+                   "human_factors_read", "human_factors_write"],
         "iat": int(time.time()),
         "exp": int(time.time()) + 3600
     }
@@ -138,6 +143,34 @@ def tech_jwt_token() -> str:
         "sub": "tech-user",
         "role": "technician",
         "scopes": ["telemetry_write", "fhir_read"],
+        "iat": int(time.time()),
+        "exp": int(time.time()) + 3600
+    }
+    return create_access_token(payload, expires_delta=1)
+
+
+@pytest.fixture
+def human_factors_jwt_token() -> str:
+    """Generate a JWT token with human_factors read+write scopes."""
+    create_access_token, _, _ = _import_auth()
+    payload = {
+        "sub": "hf-user",
+        "role": "qa_officer",
+        "scopes": ["human_factors_read", "human_factors_write"],
+        "iat": int(time.time()),
+        "exp": int(time.time()) + 3600
+    }
+    return create_access_token(payload, expires_delta=1)
+
+
+@pytest.fixture
+def hf_read_only_token() -> str:
+    """Generate a JWT token with only human_factors_read scope (no write)."""
+    create_access_token, _, _ = _import_auth()
+    payload = {
+        "sub": "hf-read-user",
+        "role": "researcher",
+        "scopes": ["human_factors_read"],
         "iat": int(time.time()),
         "exp": int(time.time()) + 3600
     }
@@ -497,7 +530,9 @@ def sample_audit_entries() -> List[Dict[str, Any]]:
             record_id=i,
             timestamp=timestamp,
             user_id="test-user",
-            data=data
+            data=data,
+            previous_state=None,
+            reason="test entry",
         )
         entries.append({
             "id": i + 1,
@@ -508,7 +543,9 @@ def sample_audit_entries() -> List[Dict[str, Any]]:
             "record_id": i,
             "timestamp": timestamp.isoformat(),
             "user_id": "test-user",
-            "data": data
+            "data": data,
+            "previous_state": None,
+            "reason": "test entry",
         })
         prev_hash = current_hash
 

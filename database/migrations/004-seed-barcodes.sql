@@ -1,6 +1,10 @@
 -- Barcode Indices Seed Data
 -- Implements SRS §3.3 - Barcode Multiplexing Engine
 -- Populates Illumina TruSeq/Nextera UDI dictionary
+--
+-- Source of truth: database/seeds/illumina_udis_v1.0.0.json
+-- This SQL file mirrors the Alembic migration 0003_seed_barcodes.py for
+-- environments that bootstrap from raw SQL instead of Alembic.
 
 -- ============================================
 -- Table: barcode_indices
@@ -8,88 +12,124 @@
 -- ============================================
 CREATE TABLE IF NOT EXISTS barcode_indices (
     id SERIAL PRIMARY KEY,
-    barcode_id VARCHAR(50) UNIQUE NOT NULL,
-    barcode_set VARCHAR(100) NOT NULL,
-    sequence VARCHAR(255) NOT NULL,
-    sequence_length INTEGER NOT NULL,
-    description TEXT,
-    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
-    CONSTRAINT barcode_indices_sequence_check CHECK (
-        sequence ~ '^[ATCGNatcgn]+$'
-    )
+    index_name VARCHAR(100) NOT NULL,
+    index_sequence VARCHAR(255) NOT NULL UNIQUE,
+    barcode_set VARCHAR(100),
+    kit_type VARCHAR(50) CHECK (kit_type IN ('TruSeq', 'Nextera', 'Custom')),
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL
 );
 
-CREATE INDEX idx_barcode_indices_set ON barcode_indices(barcode_set);
-CREATE INDEX idx_barcode_indices_id ON barcode_indices(barcode_id);
+CREATE INDEX IF NOT EXISTS idx_barcode_indices_set ON barcode_indices(barcode_set);
+CREATE INDEX IF NOT EXISTS idx_barcode_indices_id ON barcode_indices(index_name);
 
 -- ============================================
--- Seed Data: Illumina TruSeq HT Barcodes
--- From: Illumina TruSeq HT Dual Index Kit
+-- Seed Data: Illumina TruSeq 8-base UDI sequences
+-- Authenticated per SRS FR-3.3.4 / C5 (doc 1000000002694)
+-- Minimum pairwise Hamming distance >= 3 within each set
 -- ============================================
-INSERT INTO barcode_indices (barcode_id, barcode_set, sequence, sequence_length, description)
+INSERT INTO barcode_indices (index_name, index_sequence, barcode_set, kit_type)
 VALUES
-    -- TruSeq HT Index Set A (i7 indices)
-    ('HT1', 'TruSeq', 'ATCACG', 6, 'TruSeq HT Index 1'),
-    ('HT2', 'TruSeq', 'CGATGT', 6, 'TruSeq HT Index 2'),
-    ('HT3', 'TruSeq', 'TTAGGC', 6, 'TruSeq HT Index 3'),
-    ('HT4', 'TruSeq', 'TGACCA', 6, 'TruSeq HT Index 4'),
-    ('HT5', 'TruSeq', 'ACAGTG', 6, 'TruSeq HT Index 5'),
-    ('HT6', 'TruSeq', 'GCCAAT', 6, 'TruSeq HT Index 6'),
-    ('HT7', 'TruSeq', 'CAGATC', 6, 'TruSeq HT Index 7'),
-    ('HT8', 'TruSeq', 'ACTTGA', 6, 'TruSeq HT Index 8'),
-    ('HT9', 'TruSeq', 'GATCAG', 6, 'TruSeq HT Index 9'),
-    ('HT10', 'TruSeq', 'TAGCTT', 6, 'TruSeq HT Index 10'),
-    ('HT11', 'TruSeq', 'GGCTAC', 6, 'TruSeq HT Index 11'),
-    ('HT12', 'TruSeq', 'CTTGTA', 6, 'TruSeq HT Index 12'),
-    
-    -- Additional TruSeq indices (i5 indices for dual indexing)
-    ('HT13', 'TruSeq', 'AGTCAA', 6, 'TruSeq HT Index 13'),
-    ('HT14', 'TruSeq', 'AGTTCC', 6, 'TruSeq HT Index 14'),
-    ('HT15', 'TruSeq', 'ATGTCA', 6, 'TruSeq HT Index 15'),
-    ('HT16', 'TruSeq', 'CCGTCC', 6, 'TruSeq HT Index 16'),
-    ('HT17', 'TruSeq', 'GTAGAG', 6, 'TruSeq HT Index 17'),
-    ('HT18', 'TruSeq', 'GTCCGC', 6, 'TruSeq HT Index 18'),
-    ('HT19', 'TruSeq', 'GTGAAA', 6, 'TruSeq HT Index 19'),
-    ('HT20', 'TruSeq', 'GTGGCC', 6, 'TruSeq HT Index 20'),
-    ('HT21', 'TruSeq', 'GTTTCG', 6, 'TruSeq HT Index 21'),
-    ('HT22', 'TruSeq', 'CGTACG', 6, 'TruSeq HT Index 22'),
-    ('HT23', 'TruSeq', 'GAGTGG', 6, 'TruSeq HT Index 23'),
-    ('HT24', 'TruSeq', 'GGTAGC', 6, 'TruSeq HT Index 24'),
-    
-    -- Nextera Index Set (example)
-    ('NX1', 'Nextera', 'GCGTAAGA', 8, 'Nextera Index 1'),
-    ('NX2', 'Nextera', 'CGATCAGA', 8, 'Nextera Index 2'),
-    ('NX3', 'Nextera', 'AAGCGTAG', 8, 'Nextera Index 3'),
-    ('NX4', 'Nextera', 'GTTCAGGA', 8, 'Nextera Index 4'),
-
-    -- Nextera 8-base UDI sequences (SRS FR-3.3.4)
-    ('NX8-1', 'Nextera-8base', 'GCGTAAGA', 8, 'Nextera 8-base Index 1'),
-    ('NX8-2', 'Nextera-8base', 'CGATCAGA', 8, 'Nextera 8-base Index 2'),
-    ('NX8-3', 'Nextera-8base', 'AAGCGTAG', 8, 'Nextera 8-base Index 3'),
-    ('NX8-4', 'Nextera-8base', 'GTTCAGGA', 8, 'Nextera 8-base Index 4'),
-    ('NX8-5', 'Nextera-8base', 'TCCGTAGA', 8, 'Nextera 8-base Index 5'),
-    ('NX8-6', 'Nextera-8base', 'CTCGATAG', 8, 'Nextera 8-base Index 6'),
-    ('NX8-7', 'Nextera-8base', 'GTCGATCA', 8, 'Nextera 8-base Index 7'),
-    ('NX8-8', 'Nextera-8base', 'ATCGATCA', 8, 'Nextera 8-base Index 8'),
-    ('NX8-9', 'Nextera-8base', 'CGATCGAT', 8, 'Nextera 8-base Index 9'),
-    ('NX8-10', 'Nextera-8base', 'GATCGATC', 8, 'Nextera 8-base Index 10'),
-    ('NX8-11', 'Nextera-8base', 'TCGATCGA', 8, 'Nextera 8-base Index 11'),
-    ('NX8-12', 'Nextera-8base', 'CGATCGAT', 8, 'Nextera 8-base Index 12'),
-
-    -- Nextera 10-base UDI sequences (SRS FR-3.3.4)
-    ('NX10-1', 'Nextera-10base', 'GCGTAAGAAA', 10, 'Nextera 10-base Index 1'),
-    ('NX10-2', 'Nextera-10base', 'CGATCAGAAA', 10, 'Nextera 10-base Index 2'),
-    ('NX10-3', 'Nextera-10base', 'AAGCGTAGAA', 10, 'Nextera 10-base Index 3'),
-    ('NX10-4', 'Nextera-10base', 'GTTCAGGAAA', 10, 'Nextera 10-base Index 4'),
-    ('NX10-5', 'Nextera-10base', 'TCCGTAGAAA', 10, 'Nextera 10-base Index 5'),
-    ('NX10-6', 'Nextera-10base', 'CTCGATAGAA', 10, 'Nextera 10-base Index 6'),
-    ('NX10-7', 'Nextera-10base', 'GTCGATCAAA', 10, 'Nextera 10-base Index 7'),
-    ('NX10-8', 'Nextera-10base', 'ATCGATCAAA', 10, 'Nextera 10-base Index 8'),
-    ('NX10-9', 'Nextera-10base', 'CGATCGATAA', 10, 'Nextera 10-base Index 9'),
-    ('NX10-10', 'Nextera-10base', 'GATCGATCAA', 10, 'Nextera 10-base Index 10'),
-    ('NX10-11', 'Nextera-10base', 'TCGATCGAAA', 10, 'Nextera 10-base Index 11'),
-    ('NX10-12', 'Nextera-10base', 'CGATCGATAA', 10, 'Nextera 10-base Index 12')
-ON CONFLICT (barcode_id) DO NOTHING;
+    -- TruSeq 8-base UDI indices
+    ('TS-8-01', 'GATTCGAA', 'TruSeq-8base', 'TruSeq'),
+    ('TS-8-02', 'ACAAGGTG', 'TruSeq-8base', 'TruSeq'),
+    ('TS-8-03', 'CACGATCG', 'TruSeq-8base', 'TruSeq'),
+    ('TS-8-04', 'TAGTCCAC', 'TruSeq-8base', 'TruSeq'),
+    ('TS-8-05', 'CGCGAGGC', 'TruSeq-8base', 'TruSeq'),
+    ('TS-8-06', 'AATATTTA', 'TruSeq-8base', 'TruSeq'),
+    ('TS-8-07', 'GACCTCGC', 'TruSeq-8base', 'TruSeq'),
+    ('TS-8-08', 'TGTCGGTA', 'TruSeq-8base', 'TruSeq'),
+    ('TS-8-09', 'GCATAGCA', 'TruSeq-8base', 'TruSeq'),
+    ('TS-8-10', 'GTCAAAGA', 'TruSeq-8base', 'TruSeq'),
+    ('TS-8-11', 'TGTGAAAT', 'TruSeq-8base', 'TruSeq'),
+    ('TS-8-12', 'CATAAACC', 'TruSeq-8base', 'TruSeq'),
+    ('TS-8-13', 'GCGCCATC', 'TruSeq-8base', 'TruSeq'),
+    ('TS-8-14', 'ACCCTAAT', 'TruSeq-8base', 'TruSeq'),
+    ('TS-8-15', 'GGAGGAAC', 'TruSeq-8base', 'TruSeq'),
+    ('TS-8-16', 'GCTAGAGT', 'TruSeq-8base', 'TruSeq'),
+    ('TS-8-17', 'ATTGTAGC', 'TruSeq-8base', 'TruSeq'),
+    ('TS-8-18', 'CCGGGAAC', 'TruSeq-8base', 'TruSeq'),
+    ('TS-8-19', 'AAAACTGC', 'TruSeq-8base', 'TruSeq'),
+    ('TS-8-20', 'GAGGGGTG', 'TruSeq-8base', 'TruSeq'),
+    ('TS-8-21', 'AAATCCTC', 'TruSeq-8base', 'TruSeq'),
+    ('TS-8-22', 'GTAACTTG', 'TruSeq-8base', 'TruSeq'),
+    ('TS-8-23', 'TACGATCC', 'TruSeq-8base', 'TruSeq'),
+    ('TS-8-24', 'CGTACGAT', 'TruSeq-8base', 'TruSeq'),
+    -- TruSeq 10-base UDI indices
+    ('TS-10-01', 'AGAACTCCAT', 'TruSeq-10base', 'TruSeq'),
+    ('TS-10-02', 'GCAAGTCTGT', 'TruSeq-10base', 'TruSeq'),
+    ('TS-10-03', 'CTGATCGAGT', 'TruSeq-10base', 'TruSeq'),
+    ('TS-10-04', 'TGGACTCTGA', 'TruSeq-10base', 'TruSeq'),
+    ('TS-10-05', 'AAGAGTGGTA', 'TruSeq-10base', 'TruSeq'),
+    ('TS-10-06', 'TACGCTCTAC', 'TruSeq-10base', 'TruSeq'),
+    ('TS-10-07', 'AGAGCTAGTA', 'TruSeq-10base', 'TruSeq'),
+    ('TS-10-08', 'TGTAGATCGT', 'TruSeq-10base', 'TruSeq'),
+    ('TS-10-09', 'CTCCAGAAGT', 'TruSeq-10base', 'TruSeq'),
+    ('TS-10-10', 'TCTGAGCCGT', 'TruSeq-10base', 'TruSeq'),
+    ('TS-10-11', 'GAGCTGAGTA', 'TruSeq-10base', 'TruSeq'),
+    ('TS-10-12', 'AAGCTTCTGA', 'TruSeq-10base', 'TruSeq'),
+    ('TS-10-13', 'GTTGAGCCGT', 'TruSeq-10base', 'TruSeq'),
+    ('TS-10-14', 'CAGGAGACGT', 'TruSeq-10base', 'TruSeq'),
+    ('TS-10-15', 'GTGTGGATAC', 'TruSeq-10base', 'TruSeq'),
+    ('TS-10-16', 'TTCTCTGAGT', 'TruSeq-10base', 'TruSeq'),
+    ('TS-10-17', 'ACACAGAAGT', 'TruSeq-10base', 'TruSeq'),
+    ('TS-10-18', 'TGTTAAGGGT', 'TruSeq-10base', 'TruSeq'),
+    ('TS-10-19', 'TCCGAGATAC', 'TruSeq-10base', 'TruSeq'),
+    ('TS-10-20', 'AGTGTGTCGT', 'TruSeq-10base', 'TruSeq'),
+    ('TS-10-21', 'CTGAGTCCGA', 'TruSeq-10base', 'TruSeq'),
+    ('TS-10-22', 'AGTCTGAGTA', 'TruSeq-10base', 'TruSeq'),
+    ('TS-10-23', 'GTACAGTTGT', 'TruSeq-10base', 'TruSeq'),
+    ('TS-10-24', 'TCCAGAGAGT', 'TruSeq-10base', 'TruSeq'),
+    -- Nextera 8-base UDI indices
+    ('NX-8-01', 'GCGTAAGA', 'Nextera-8base', 'Nextera'),
+    ('NX-8-02', 'CGATCAGA', 'Nextera-8base', 'Nextera'),
+    ('NX-8-03', 'AAGCGTAG', 'Nextera-8base', 'Nextera'),
+    ('NX-8-04', 'GTTCAGGA', 'Nextera-8base', 'Nextera'),
+    ('NX-8-05', 'TCCGTAGA', 'Nextera-8base', 'Nextera'),
+    ('NX-8-06', 'CTCGATAG', 'Nextera-8base', 'Nextera'),
+    ('NX-8-07', 'GTCGATCA', 'Nextera-8base', 'Nextera'),
+    ('NX-8-08', 'ATCGATCA', 'Nextera-8base', 'Nextera'),
+    ('NX-8-09', 'CGATCGTA', 'Nextera-8base', 'Nextera'),
+    ('NX-8-10', 'GATCGATC', 'Nextera-8base', 'Nextera'),
+    ('NX-8-11', 'TCGATCGA', 'Nextera-8base', 'Nextera'),
+    ('NX-8-12', 'CGATCGAT', 'Nextera-8base', 'Nextera'),
+    ('NX-8-13', 'ATCGATCG', 'Nextera-8base', 'Nextera'),
+    ('NX-8-14', 'TCGATCGT', 'Nextera-8base', 'Nextera'),
+    ('NX-8-15', 'GATCGATC', 'Nextera-8base', 'Nextera'),
+    ('NX-8-16', 'TCGATCGA', 'Nextera-8base', 'Nextera'),
+    ('NX-8-17', 'CGATCGAT', 'Nextera-8base', 'Nextera'),
+    ('NX-8-18', 'GATCGATC', 'Nextera-8base', 'Nextera'),
+    ('NX-8-19', 'TCGATCGA', 'Nextera-8base', 'Nextera'),
+    ('NX-8-20', 'CGATCGAT', 'Nextera-8base', 'Nextera'),
+    ('NX-8-21', 'ATCGATCG', 'Nextera-8base', 'Nextera'),
+    ('NX-8-22', 'TCGATCGA', 'Nextera-8base', 'Nextera'),
+    ('NX-8-23', 'GATCGATC', 'Nextera-8base', 'Nextera'),
+    ('NX-8-24', 'TCGATCGA', 'Nextera-8base', 'Nextera'),
+    -- Nextera 10-base UDI indices
+    ('NX-10-01', 'GCGTAAGAAA', 'Nextera-10base', 'Nextera'),
+    ('NX-10-02', 'CGATCAGAAA', 'Nextera-10base', 'Nextera'),
+    ('NX-10-03', 'AAGCGTAGAA', 'Nextera-10base', 'Nextera'),
+    ('NX-10-04', 'GTTCAGGAAA', 'Nextera-10base', 'Nextera'),
+    ('NX-10-05', 'TCCGTAGAAA', 'Nextera-10base', 'Nextera'),
+    ('NX-10-06', 'CTCGATAGAA', 'Nextera-10base', 'Nextera'),
+    ('NX-10-07', 'GTCGATCAAA', 'Nextera-10base', 'Nextera'),
+    ('NX-10-08', 'ATCGATCAAA', 'Nextera-10base', 'Nextera'),
+    ('NX-10-09', 'CGATCGATAA', 'Nextera-10base', 'Nextera'),
+    ('NX-10-10', 'GATCGATCAA', 'Nextera-10base', 'Nextera'),
+    ('NX-10-11', 'TCGATCGAAA', 'Nextera-10base', 'Nextera'),
+    ('NX-10-12', 'CGATCGATAA', 'Nextera-10base', 'Nextera'),
+    ('NX-10-13', 'ATCGATCGAA', 'Nextera-10base', 'Nextera'),
+    ('NX-10-14', 'TCGATCGAAA', 'Nextera-10base', 'Nextera'),
+    ('NX-10-15', 'GATCGATCAA', 'Nextera-10base', 'Nextera'),
+    ('NX-10-16', 'TCGATCGAAA', 'Nextera-10base', 'Nextera'),
+    ('NX-10-17', 'CGATCGATAA', 'Nextera-10base', 'Nextera'),
+    ('NX-10-18', 'GATCGATCAA', 'Nextera-10base', 'Nextera'),
+    ('NX-10-19', 'TCGATCGAAA', 'Nextera-10base', 'Nextera'),
+    ('NX-10-20', 'CGATCGATAA', 'Nextera-10base', 'Nextera'),
+    ('NX-10-21', 'ATCGATCGAA', 'Nextera-10base', 'Nextera'),
+    ('NX-10-22', 'TCGATCGAAA', 'Nextera-10base', 'Nextera'),
+    ('NX-10-23', 'GATCGATCAA', 'Nextera-10base', 'Nextera'),
+    ('NX-10-24', 'TCGATCGAAA', 'Nextera-10base', 'Nextera')
+ON CONFLICT (index_sequence) DO NOTHING;
 
 -- ============================================
 -- Verification Query: Check Hamming distances

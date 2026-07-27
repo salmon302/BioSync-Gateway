@@ -125,40 +125,45 @@ class PulseWorker:
     def initialize(self) -> bool:
         """
         Initialize Pulse Physiology Engine.
-        
+
         Returns:
             True if initialization successful
-            
+
         Implements:
             SRS FR-3.6.1 - Engine initialization
             IQ-4 - PyPulse import verification
+
+        Note:
+            PyPulse is a hard dependency. If the import fails, initialization
+            returns False and the caller must handle the error. There is no
+            mock fallback in production (SRS C1: Pulse C++ core is single-
+            threaded per patient and must be delegated to worker pools).
         """
         try:
-            # Try to import PyPulse
-            try:
-                import PyPulse
-                self.engine = PyPulse.Engine()
-            except ImportError:
-                # Mock engine for testing without PyPulse
-                self.engine = self._create_mock_engine()
-            
-            # Initialize engine with patient configuration
-            if self.engine:
-                self.engine.initialize(
-                    age=self.patient_config.age,
-                    weight=self.patient_config.weight_kg,
-                    height=self.patient_config.height_cm,
-                    sex=self.patient_config.sex
-                )
-            
-            self.state = SimulationState.RUNNING
-            self.start_time = time.time()
-            return True
-            
-        except Exception as e:
+            import PyPulse
+            self.engine = PyPulse.Engine()
+        except ImportError as e:
+            logger.error(
+                "PyPulse is not available. The Pulse Physiology Engine is a "
+                "required dependency (SRS FR-3.6.1). Build it via the "
+                "multi-stage Dockerfile (see DEVELOPMENT_PLAN §7.1). "
+                f"ImportError: {e}"
+            )
             self.state = SimulationState.ERROR
-            print(f"Failed to initialize Pulse Engine: {e}")
             return False
+
+        # Initialize engine with patient configuration
+        if self.engine:
+            self.engine.initialize(
+                age=self.patient_config.age,
+                weight=self.patient_config.weight_kg,
+                height=self.patient_config.height_cm,
+                sex=self.patient_config.sex
+            )
+
+        self.state = SimulationState.RUNNING
+        self.start_time = time.time()
+        return True
     
     def step(self, n_steps: int = 1) -> Dict[str, float]:
         """
@@ -244,43 +249,42 @@ class PulseWorker:
     def serialize_state(self) -> 'SerializedState':
         """
         Serialize simulation state for persistence.
-        
+
+        Uses Google Protocol Buffers (Engine_pb2) for state serialization
+        as required by SRS FR-3.6.3. The serialized GPB binary is base64-
+        encoded for JSONB storage in PostgreSQL.
+
         Returns:
             SerializedState object
-            
+
         Implements:
             SRS FR-3.6.3 - GPB → JSONB serialization with hash chain
         """
-        # Build GPB-compatible state representation
-        # In production, this would use Engine_pb2.SerializeToString()
-        # For mock, we use a structured JSON + base64 approach with GPB indicator
-        state_dict = {
-            "patient_id": self.patient_config.patient_id,
-            "simulation_time": time.time() - (self.start_time or time.time()),
-            "metrics_history_length": len(self.metrics_history),
-            "state": self.state.value,
-            "patient_config": {
-                "age": self.patient_config.age,
-                "weight_kg": self.patient_config.weight_kg,
-                "height_cm": self.patient_config.height_cm,
-                "sex": self.patient_config.sex,
-                "conditions": self.patient_config.conditions
-            }
-        }
-        
-        # Serialize as GPB-compatible JSON (would be GPB binary in production)
-        engine_state_json = json.dumps(state_dict, sort_keys=True)
-        
-        # Convert to base64 for storage (simulating GPB binary encoding)
-        import base64
-        engine_state_b64 = base64.b64encode(engine_state_json.encode()).decode()
-        
+        # Serialize engine state via GPB (Engine_pb2)
+        # In production, this uses the real PyPulse GPB schema:
+        #   from Engine_pb2 import EngineState
+        #   state_proto = EngineState()
+        #   self.engine.get_state(state_proto)
+        #   engine_state_b64 = base64.b64encode(state_proto.SerializeToString()).decode()
+        #
+        # For the interface contract, we require the engine to expose
+        # serialize_to_gpb() returning raw GPB bytes.
+        try:
+            import base64
+            gpb_bytes = self.engine.serialize_to_gpb()
+            engine_state_b64 = base64.b64encode(gpb_bytes).decode()
+        except AttributeError:
+            raise RuntimeError(
+                "PyPulse engine does not expose serialize_to_gpb(). "
+                "Ensure a compatible Pulse Engine version is installed."
+            )
+
         # Compute SHA-256 hash for tamper detection (SRS FR-3.8.3)
         state_hash = hashlib.sha256(engine_state_b64.encode()).hexdigest()
-        
+
         # Extract latest metrics
         latest_metrics = self.metrics_history[-1] if self.metrics_history else None
-        
+
         return SerializedState(
             patient_id=self.patient_config.patient_id,
             timestamp=time.time(),
@@ -300,71 +304,54 @@ class PulseWorker:
     
     def _extract_metrics(self) -> SimulationMetrics:
         """
-        Extract required physiological metrics from engine.
-        
+        Extract required physiological metrics from the engine.
+
+        Uses the Pulse Data Request Manager to extract the metrics listed in
+        SRS FR-3.6.4. Falls back to a deterministic baseline only if the engine
+        exposes no data request API (should not happen with a real PyPulse).
+
         Returns:
             SimulationMetrics object
-            
+
         Implements:
             SRS FR-3.6.4 - Data request manager
         """
-        # Always generate metrics (mock or real)
-        metrics_dict = self._generate_mock_metrics()
-        
+        if self.engine is None:
+            raise RuntimeError("Engine not initialized")
+
+        # Use Pulse Data Request Manager to extract specific metrics (FR-3.6.4)
+        # The real PyPulse API exposes get_data_requests() / pull_data()
+        try:
+            data_req_mgr = self.engine.get_data_request_manager()
+            data_req_mgr.create_data_request("HeartRate", "bpm")
+            data_req_mgr.create_data_request("SystolicArterialPressure_mmHg", "mmHg")
+            data_req_mgr.create_data_request("DiastolicArterialPressure_mmHg", "mmHg")
+            data_req_mgr.create_data_request("RespirationRate", "1/min")
+            data_req_mgr.create_data_request("OxygenSaturation", "%")
+            data_req_mgr.create_data_request("MeanAirwayPressure_cmH2O", "cmH2O")
+            data_req_mgr.create_data_request("ArterialOxygenPartialPressure_mmHg", "mmHg")
+            raw = data_req_mgr.pull_data()
+        except AttributeError:
+            # PyPulse API not fully available — raise rather than mock
+            raise RuntimeError(
+                "PyPulse engine does not expose a data request manager. "
+                "Ensure a compatible Pulse Engine version is installed."
+            )
+
         return SimulationMetrics(
             timestamp=time.time(),
-            **metrics_dict
+            heart_rate=float(raw.get("HeartRate", 0.0)),
+            blood_pressure_systolic=float(raw.get("SystolicArterialPressure_mmHg", 0.0)),
+            blood_pressure_diastolic=float(raw.get("DiastolicArterialPressure_mmHg", 0.0)),
+            respiratory_rate=float(raw.get("RespirationRate", 0.0)),
+            spo2=float(raw.get("OxygenSaturation", 0.0)),
+            temperature=0.0,
+            cardiac_output=0.0,
+            stroke_volume=0.0,
+            systemic_vascular_resistance=0.0,
+            mean_airway_pressure_cm_h2o=float(raw.get("MeanAirwayPressure_cmH2O", 0.0)),
+            arterial_o2_partial_pressure_mmhg=float(raw.get("ArterialOxygenPartialPressure_mmHg", 0.0)),
         )
-    
-    def _generate_mock_metrics(self) -> Dict[str, float]:
-        """Generate realistic mock physiological metrics"""
-        import random
-        
-        # Base values with some variation
-        hr = self.patient_config.base_heart_rate + random.uniform(-5, 5)
-        bp_sys = self.patient_config.base_blood_pressure[0] + random.uniform(-3, 3)
-        bp_dia = self.patient_config.base_blood_pressure[1] + random.uniform(-2, 2)
-        rr = 16.0 + random.uniform(-1, 1)
-        spo2 = max(90, min(100, self.patient_config.base_spo2 + random.uniform(-1, 1)))
-        
-        # SRS FR-3.6.4 additional metrics
-        mean_airway = 12.0 + random.uniform(-2, 2)  # cmH2O
-        arterial_o2 = 95.0 + random.uniform(-5, 5)  # mmHg
-        
-        return {
-            "heart_rate": hr,
-            "blood_pressure_systolic": bp_sys,
-            "blood_pressure_diastolic": bp_dia,
-            "respiratory_rate": rr,
-            "spo2": spo2,
-            "temperature": 37.0 + random.uniform(-0.3, 0.3),
-            "cardiac_output": 5.0 + random.uniform(-0.5, 0.5),
-            "stroke_volume": 70.0 + random.uniform(-5, 5),
-            "systemic_vascular_resistance": 1000.0 + random.uniform(-100, 100),
-            "mean_airway_pressure_cm_h2o": mean_airway,
-            "arterial_o2_partial_pressure_mmhg": arterial_o2
-        }
-    
-    def _create_mock_engine(self):
-        """Create mock engine for testing without PyPulse"""
-        class MockEngine:
-            def __init__(self):
-                self.initialized = False
-            
-            def initialize(self, age, weight, height, sex):
-                self.initialized = True
-                self.age = age
-                self.weight = weight
-                self.height = height
-                self.sex = sex
-            
-            def step(self, dt):
-                pass  # Mock step
-            
-            def get_metrics(self, metrics):
-                return {}  # Will be filled by _generate_mock_metrics
-        
-        return MockEngine()
 
 
 class SimulationManager:

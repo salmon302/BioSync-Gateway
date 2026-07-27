@@ -24,16 +24,18 @@ WITH chain_verification AS (
         timestamp,
         previous_hash,
         current_hash,
-        -- Compute expected hash
+        previous_state,
+        reason,
+        -- Compute expected hash per SRS FR-3.8.3:
+        --   H_{i-1} || T_i || U_i || D_prev || D_new || R_i
         encode(
             digest(
                 COALESCE(previous_hash, '') ||
-                table_name ||
-                operation ||
-                record_id::TEXT ||
                 timestamp::TEXT ||
                 COALESCE(user_id, '') ||
-                COALESCE(data::TEXT, '{}')
+                COALESCE(previous_state::TEXT, '{}') ||
+                COALESCE(data::TEXT, '{}') ||
+                COALESCE(reason, '')
             , 'sha256')
         , 'hex') AS computed_hash,
         -- Check if previous_hash matches expected
@@ -48,12 +50,11 @@ WITH chain_verification AS (
         current_hash = encode(
             digest(
                 COALESCE(previous_hash, '') ||
-                table_name ||
-                operation ||
-                record_id::TEXT ||
                 timestamp::TEXT ||
                 COALESCE(user_id, '') ||
-                COALESCE(data::TEXT, '{}')
+                COALESCE(previous_state::TEXT, '{}') ||
+                COALESCE(data::TEXT, '{}') ||
+                COALESCE(reason, '')
             , 'sha256')
         , 'hex') AS current_hash_valid
     FROM audit_log

@@ -1,8 +1,8 @@
 # Software Requirements Specification (SRS)
 
 **Project:** BioSync-Gateway — 2D High-Throughput Medical Telemetry & Laboratory Informatics Middleware  
-**Version:** 1.0  
-**Date:** 2026-07-13  
+**Version:** 1.1  
+**Date:** 2026-07-24  
 **Document Type:** Software Requirements Specification (SRS)
 
 ---
@@ -15,7 +15,7 @@ BioSync-Gateway provides a secure, regulatory-compliant middleware gateway bridg
 
 ### 1.2 Scope
 
-The system encompasses six major capability domains:
+The system encompasses eight major capability domains:
 
 1. **Real-Time Telemetry Visualization:** 2D rendering of time-series surgical device data (pressure, flow rate) at 60 fps via WebGL/Canvas.
 2. **Laboratory Automation:** Microplate configuration management (96-well, 384-well), barcode multiplexing safety validation, and automated dilution worklist generation.
@@ -23,6 +23,8 @@ The system encompasses six major capability domains:
 4. **FHIR Interoperability:** HL7 FHIR R4 compliant data exchange using `DeviceMetric` and `Observation` resources.
 5. **Regulatory Data Integrity:** Cryptographic hash-chained audit trails enforced at the database level via PL/pgSQL triggers and `pgcrypto`.
 6. **Human Factors Instrumentation:** Passive UI metrics capture for uFMEA-based usability validation.
+7. **Advanced Physiological Simulation & Analytics:** In silico PK/PD lab loop, closed-loop clinical chemistry generation, synthetic digital twin cohorts (FHIR), and a liquid biopsy/MRD analytical sandbox built atop the Pulse Engine.
+8. **AI-Generated Clinical Text Simulation:** A lightweight LLM/RAG gateway synthesizing unstructured clinical narratives and pathology reports from structured telemetry and genomic data[cite: 1, 2].
 
 ### 1.3 Definitions and Acronyms
 
@@ -41,6 +43,20 @@ The system encompasses six major capability domains:
 | **UDI** | Unique Device Identifier / Unique Dual Index |
 | **uFMEA** | Usability Failure Modes and Effects Analysis |
 | **WebGL** | Web Graphics Library (GPU-accelerated browser rendering) |
+| **CAP/CLIA** | College of American Pathologists / Clinical Laboratory Improvement Amendments (laboratory accreditation & testing standards) |
+| **cfDNA** | Cell-Free DNA (fragmented DNA circulating in plasma) |
+| **CRO** | Contract Research Organization |
+| **EHR** | Electronic Health Record |
+| **HIPAA/GDPR** | U.S. Health Insurance Portability and Accountability Act / EU General Data Protection Regulation |
+| **LBx** | Liquid Biopsy |
+| **LLM** | Large Language Model |
+| **LOD** | Limit of Detection |
+| **LIMS** | Laboratory Information Management System |
+| **MRD** | Minimal Residual Disease |
+| **Ollama / vLLM** | Local/lightweight LLM serving runtimes (OpenAI-compatible) |
+| **OpenRouter** | API routing marketplace aggregating multiple LLM providers (OpenAI-compatible) |
+| **PK/PD** | Pharmacokinetics / Pharmacodynamics |
+| **RAG** | Retrieval-Augmented Generation |
 
 ### 1.4 References
 
@@ -51,6 +67,10 @@ The system encompasses six major capability domains:
 - Illumina Adapter Sequences Document (1000000002694)
 - AccessGUDID — FDA Global Unique Device Identification Database
 - NCBI ClinVar E-utilities API
+- OpenRouter API (`https://openrouter.ai/`)
+- Ollama (`https://ollama.com/`) / vLLM (`https://github.com/vllm-project/vllm`)
+- CAP Hematopathology Reporting Templates (College of American Pathologists)
+- HIPAA (45 CFR Parts 160 & 164) / GDPR (Regulation (EU) 2016/679)
 
 ---
 
@@ -68,6 +88,8 @@ The architecture resolves the tension between high-frequency real-time execution
 1. **Frontend User Console** (React/TypeScript — WebGL rendering, CSS Grid microplate layout)
 2. **Processing Engine Middleware** (FastAPI/Python — signal processing, FHIR mapping, Pulse Engine orchestration)
 3. **Compliance Storage Tier** (PostgreSQL — trigger-enforced immutability, hash-chained audit ledger)
+
+The architecture additionally incorporates an **AI Text Simulation Gateway** as an extension of the Processing Engine Middleware: an OpenAI-compatible LLM client (routed to OpenRouter or local Ollama/vLLM) backed by a local static RAG repository. All LLM inference is isolated from real-time telemetry paths via async task queues. A **Simulation Scenario Orchestrator** composes the advanced Pulse-driven analytics features (FR-3.11–FR-3.16) into reproducible, end-to-end simulated workflows for downstream LIMS/EHR ingestion validation[cite: 1, 2].
 
 ### 2.2 User Classes and Characteristics
 
@@ -93,6 +115,10 @@ The architecture resolves the tension between high-frequency real-time execution
 - **C3:** All database mutations on finalized records must be rejected at the storage tier — application-layer audit guards alone are insufficient.
 - **C4:** 3D rendering is deliberately excluded to prevent DOM saturation during high-throughput streams.
 - **C5:** Barcode validation must use Illumina TruSeq/Nextera authentic adapter sequences (8-base and 10-base) sourced from public documentation.
+- **C6:** All LLM/RAG inference calls shall be isolated from real-time telemetry processing via FastAPI async tasks or background worker queues; they shall never block the event loop or telemetry WebSocket relay.
+- **C7:** The four advanced Pulse-driven analytics features (FR-3.11–FR-3.14) shall operate exclusively on synthetic, non-PHI data and shall be fully reproducible from stored simulation seeds or serialized states (FR-3.6.3).
+- **C8:** The LLM provider layer shall be swappable at runtime between a remote OpenRouter endpoint and a local Ollama/vLLM instance via configuration, conforming to an OpenAI-compatible SDK interface with no code changes.
+- **C9:** The RAG retrieval repository shall consist solely of a local directory of static markdown/JSON templates (e.g., CAP/CLIA reporting frameworks, FDA device manuals, EHR documentation rubrics); no external vector database or managed embedding service shall be required[cite: 1, 2].
 
 ### 2.5 Assumptions and Dependencies
 
@@ -100,6 +126,8 @@ The architecture resolves the tension between high-frequency real-time execution
 - **A2:** The PostgreSQL instance has `pgcrypto` available for `CREATE EXTENSION`.
 - **A3:** External APIs (AccessGUDID, ClinVar E-utilities) are accessible for device parameter and variant lookups.
 - **A4:** WebSocket connections between frontend and middleware are persistent and support binary frames.
+- **A5:** An LLM inference endpoint is reachable — either a local Ollama/vLLM instance or a remote OpenRouter endpoint with valid API credentials — for text-generation features.
+- **A6:** Static RAG template assets (CAP/CLIA schemas, FDA device manuals, EHR documentation rubrics) are available in the configured local repository directory.
 
 ---
 
@@ -272,6 +300,98 @@ where:
 
 **FR-3.10.3 — Caching:** External API responses shall be cached locally (TTL: 24 hours for device data, 7 days for variant data) to reduce dependency on external service availability.
 
+**FR-3.10.4 — LLM Provider Routing:** The middleware shall support routing LLM inference requests to a configurable provider endpoint (OpenRouter remote or local Ollama/vLLM) via an OpenAI-compatible SDK interface, selected at runtime from configuration (C8).
+
+**FR-3.10.5 — RAG Template Repository:** The middleware shall resolve retrieval context for text generation from a local directory of static markdown/JSON templates (CAP/CLIA reporting frameworks, FDA device manuals, Epic EHR documentation rubrics) without reliance on an external vector database (C9)[cite: 1, 2].
+
+### 3.11 In Silico Pharmacokinetics / Pharmacodynamics (PK/PD) Lab Loop
+
+Connects Pulse's physics-based circuit and substance transport equations directly to BioSync's Automated Dilution Solver (FR-3.4) and CSS Grid Microplate Editor (FR-3.2)[cite: 1, 2].
+
+**FR-3.11.1 — Substance Registration:** The middleware shall register one or more Pulse substances (pharmacologic agents) with defined PK parameters (volume of distribution, clearance, elimination half-life) into the active Pulse Engine simulation state (FR-3.6.1).
+
+**FR-3.11.2 — Clearance Cycle Simulation:** The middleware shall advance the Pulse simulation over a configurable time horizon, sampling simulated plasma concentration time-series for each registered substance at configurable intervals.
+
+**FR-3.11.3 — Target Matrix Derivation:** From the simulated plasma concentration curve, the system shall compute target concentration matrices (e.g., decayed concentration targets at specified time points) that a physical replication must achieve.
+
+**FR-3.11.4 — Pipetting Manifest Generation:** The system shall feed the derived target matrices into the Automated Dilution Solver (FR-3.4.1) to compute per-well volumetric pipetting instructions for 96-well or 384-well microplates, outputting a validated worklist (FR-3.2.5) tagged as `origin=pk_pd_loop`.
+
+**FR-3.11.5 — Loop Closure Feedback:** The generated worklist shall be available for re-ingestion as an `Observation` Bundle to close the in silico → physical → in silico loop, enabling iterative refinement and accuracy verification of dilution routines.
+
+### 3.12 Closed-Loop Clinical Chemistry Data Generation
+
+Leverages Pulse's whole-body mathematical models to extract clinical-grade metabolic and chemical vectors alongside BioSync's ClinVar genomic variant lookups (FR-3.10.2)[cite: 1, 2].
+
+**FR-3.12.1 — Chemistry Vector Extraction:** The middleware shall extract from the Pulse Engine simulated state a defined set of clinical chemistry vectors, including blood gas fractions (pO₂, pCO₂, pH, HCO₃⁻), electrolytes (Na⁺, K⁺, Cl⁻, Ca²⁺), and metabolic substrates (glucose, lactate).
+
+**FR-3.12.2 — Multi-Modal Bundle Assembly:** The system shall combine the extracted chemistry vectors with ClinVar genomic variant data into a unified multi-modal diagnostic `Bundle` (type: `transaction`) containing both `Observation` (chemistry) and genomics-referenced resources.
+
+**FR-3.12.3 — LIMS Ingestion Stress Test:** The generated synthetic multi-modal bundle shall be routable to a configurable downstream LIMS ingestion endpoint (HTTP webhook) to stress-test schema validation and ingestion resilience, capturing the response (including any `OperationOutcome`) for audit.
+
+**FR-3.12.4 — Determinism & Seedability:** Each chemistry generation run shall be reproducible from a stored Pulse seed/state (FR-3.6.3), enabling regression testing of downstream ingestion schemas.
+
+### 3.13 Synthetic "Digital Twin" Cohorts for Biopharma Services
+
+Generates continuous, compliant, and biologically reactive data bundles mapped directly to structured HL7 FHIR `Observation` resources[cite: 1, 2].
+
+**FR-3.13.1 — Cohort Definition:** The system shall accept a cohort specification (size N, demographic distribution, ClinVar variant set, physiological baseline ranges) and deterministically generate N synthetic patient identities (no PHI; synthetic identifiers per C2).
+
+**FR-3.13.2 — Reactive Time-Series:** For each cohort member, the system shall simulate continuous physiological trends (e.g., blood pressure, oxygen saturation, heart-rate variability) via the Pulse Engine, emitting FHIR `Observation` resources at a configurable cadence.
+
+**FR-3.13.3 — FHIR Mapping Compliance:** All cohort outputs shall validate against HL7 FHIR R4 schemas (FR-3.7.1) and include `subject` references to synthetic patient resources and `device` references to simulated instruments.
+
+**FR-3.13.4 — Variant Pairing:** Each digital twin's genomic profile (ClinVar variant set) shall be paired with its physiological trend stream to produce a unified, exportable cohort dataset (JSON / FHIR Bundle).
+
+**FR-3.13.5 — Privacy Assurance:** Synthetic cohorts shall contain no real patient data and shall be explicitly flagged `synthetic=true` to bypass HIPAA/GDPR constraints while enabling robust in silico analytics validation for pharma/CRO partners[cite: 1, 2].
+
+### 3.14 Analytical Sandbox for Liquid Biopsy & Minimal Residual Disease (MRD)
+
+Models how acute systemic stressors dynamically skew cell-free DNA (cfDNA) shedding and plasma volume baselines, aligning with precision oncology diagnostics (e.g., NeoGenomics PanTracer™ LBx / RaDaR® ST MRD style assays)[cite: 1, 2].
+
+**FR-3.14.1 — Stressor Injection:** The system shall support injection of acute systemic stressors (e.g., respiratory distress scenario, erratic fluid-clearance perturbation) into an active Pulse simulation to alter plasma volume and hemodynamic baselines.
+
+**FR-3.14.2 — cfDNA Shedding Model:** The middleware shall apply a configurable cfDNA shedding transfer function mapping the altered physiological state to a simulated plasma cfDNA concentration (copies/mL) and plasma volume baseline:
+
+$$C_{\text{cfDNA}} = f(\text{plasma volume}, \text{hemodynamic state}; \theta_{\text{shed}})$$
+
+where $\theta_{\text{shed}}$ is a configurable parameter set.
+
+**FR-3.14.3 — LOD Boundary Simulation:** The sandbox shall allow configuration of assay LOD thresholds and report detection pass/fail against the simulated cfDNA concentration under volatile physical conditions.
+
+**FR-3.14.4 — LIMS Webhook Verification:** The system shall emit FHIR `Observation` payloads (and optionally LLM-generated narrative per FR-3.15) to a configurable LIMS ingestion webhook and verify round-trip accuracy at extreme LOD under stressor-induced volatility.
+
+### 3.15 Lightweight LLM/RAG Clinical Text Simulation Gateway
+
+Adds an API-driven LLM/RAG layer for unstructured clinical text generation using OpenAI-compatible SDK routing to OpenRouter or local Ollama/vLLM, requiring minimal structural change to the FastAPI backend[cite: 1, 2].
+
+**FR-3.15.1 — Provider Abstraction:** The middleware shall implement an OpenAI-compatible LLM client abstraction allowing runtime selection between a remote OpenRouter endpoint and a local Ollama/vLLM instance via configuration, with no code changes (C8).
+
+**FR-3.15.2 — Async Isolation:** All LLM inference calls shall be dispatched through FastAPI async tasks or background worker queues, isolated from real-time telemetry processing paths to prevent event-loop blocking (C6).
+
+**FR-3.15.3 — RAG Repository:** The system shall maintain a local static retrieval repository (directory of markdown/JSON templates: CAP/CLIA reporting templates, FDA device manual text, Epic EHR documentation rubrics) used as the RAG context source (C9)[cite: 1, 2].
+
+**FR-3.15.4 — Pulse-to-Narrative Synthesis:** The middleware shall aggregate Pulse numeric telemetry over a configurable window (default 60 s), construct a clinical prompt, and invoke the LLM to synthesize an unstructured progress note (with medical abbreviations and subjective reasoning) suitable for EHR text-ingestion testing[cite: 1, 2].
+
+**FR-3.15.5 — Genomic/Pathology Template RAG:** For ClinVar-derived variant data (FR-3.10.2), the system shall retrieve an appropriate pathology reporting template from the RAG repository and instruct the LLM to merge structured variant data into a simulated "Molecular Pathology Summary Report"[cite: 1, 2].
+
+**FR-3.15.6 — Output Provenance:** Every LLM-generated text artifact shall be stored with provenance metadata (model id, provider, prompt hash, template id, source data hash) to support reproducibility and audit (append-only `clinical_text_outputs` table).
+
+**FR-3.15.7 — EHR Ingestion Harness:** The system shall provide a test harness that pushes generated unstructured text to a downstream EHR/FHIR mapping endpoint and validates that critical clinical signals are preserved through text → structured mapping.
+
+### 3.16 Integrated Simulation Scenario Framework
+
+A composition layer that addresses the strategic objective of building **simulated scenarios exercising each advanced feature** end-to-end, transforming BioSync into a comprehensive validation harness for downstream LIMS/EHR systems[cite: 1, 2].
+
+**FR-3.16.1 — Scenario Specification:** The system shall allow definition of a named simulation scenario that composes any subset of FR-3.11–FR-3.15 (PK/PD loop, chemistry generation, digital twin cohort, MRD sandbox, LLM narrative) with seeded parameters for reproducibility.
+
+**FR-3.16.2 — Orchestration Engine:** The middleware shall provide a scenario orchestrator that sequences the selected feature modules, propagates shared simulated patient/state context between them, and collects outputs into a single scenario run record.
+
+**FR-3.16.3 — Downstream Validation Harness:** Each scenario run shall be capable of routing its aggregated multi-modal outputs (FHIR Bundles, worklists, LLM text) to one or more configurable downstream endpoints (simulated LIMS/EHR ingestion) and capturing validation/ingestion responses.
+
+**FR-3.16.4 — Scenario Replay & Determinism:** Given the same scenario seed and configuration, the system shall reproduce identical output hashes for all deterministic (non-LLM) modules; LLM modules shall record model/version for reproducibility even when output is non-deterministic.
+
+**FR-3.16.5 — Scenario UI:** The frontend shall provide a Scenario Designer interface (FR-4.1) allowing users to assemble, configure, execute, and inspect scenarios and their downstream validation results.
+
 ---
 
 ## 4. External Interface Requirements
@@ -284,6 +404,7 @@ where:
 | Microplate Editor | React + CSS Grid | Interactive 96/384-well plate layout with click-to-inspect |
 | Audit Viewer | React + Table | Sortable, filterable audit log with hash chain integrity indicators |
 | Admin Console | React + Forms | System configuration, Pulse Engine control, JWT key management |
+| Scenario Designer | React + Forms/Canvas | Assemble, configure, execute, and inspect integrated simulation scenarios (FR-3.16) |
 
 ### 4.2 Hardware Interfaces
 
@@ -299,6 +420,7 @@ where:
 | AccessGUDID API | HTTPS REST | JSON | Device metadata retrieval |
 | NCBI ClinVar E-utilities | HTTPS REST | JSON / XML | Variant data retrieval |
 | Illumina Adapter Sequences | Static file | CSV / JSON | Barcode dictionary |
+| LLM Provider (OpenRouter / Ollama / vLLM) | HTTPS REST (OpenAI-compatible) | JSON | Clinical text generation & RAG synthesis |
 
 ### 4.4 Communication Interfaces
 
@@ -320,6 +442,7 @@ where:
 | **NFR-P4** | Hash chain verification scan (full table) | ≤ 60 seconds for 1 million audit log rows |
 | **NFR-P5** | Pulse Engine time-step computation | ≤ 50 ms per physiological time-step (single patient) |
 | **NFR-P6** | Concurrent WebSocket connections | ≥ 500 simultaneous telemetry sessions |
+| **NFR-P7** | LLM text generation isolation | Shall not degrade telemetry ingestion throughput (NFR-P1) or WebSocket relay (NFR-P3); async isolation verified under concurrent simulation load (PQ-7) |
 
 ### 5.2 Security and Compliance
 
@@ -332,6 +455,7 @@ where:
 | **NFR-S5** | Database connection shall require client certificate authentication in addition to password |
 | **NFR-S6** | Audit trail rows shall be immutable at the database level (no application-layer bypass) |
 | **NFR-S7** | Secrets (database credentials, JWT signing keys) shall be injected via Docker secrets or environment variables — never hard-coded |
+| **NFR-S8** | LLM provider API keys shall be injected via Docker secrets or environment variables; never hard-coded, logged, or committed |
 
 ### 5.3 Reliability and Availability
 
@@ -350,6 +474,7 @@ where:
 | **NFR-M2** | Chart rendering backend (ECharts vs. SciChart.js) shall be swappable via a provider abstraction without changing consuming components |
 | **NFR-M3** | Database migrations shall be managed via Alembic with forward- and backward-compatible scripts |
 | **NFR-M4** | All mathematical algorithms (Hamming distance, dilution solver, EMA filter) shall be implemented in pure Python with no external numeric library dependencies beyond NumPy |
+| **NFR-M5** | LLM provider backend (OpenRouter vs. Ollama/vLLM) shall be swappable via configuration without changing consuming components (provider abstraction) |
 
 ### 5.5 Usability
 
@@ -358,6 +483,7 @@ where:
 | **NFR-U1** | Alarm acknowledgment shall require no more than 2 clicks/gestures from the active dashboard view |
 | **NFR-U2** | Microplate layout shall support keyboard navigation (arrow keys to traverse wells) |
 | **NFR-U3** | The web application shall be fully responsive and usable on displays from 13" (laptop) to 27" (clinical workstation monitor) |
+| **NFR-U4** | Scenario Designer shall allow a complete scenario (any subset of FR-3.11–FR-3.16) to be assembled and executed in ≤ 5 user interactions from the main console |
 
 ---
 
@@ -378,6 +504,15 @@ where:
 | `audit_log` | Hash-chained audit trail | Immutable (BEFORE UPDATE/DELETE trigger rejection) |
 | `simulation_states` | Serialized Pulse Engine states (Protocol Buffer → JSONB) | Append-only |
 | `human_factors_metrics` | Pseudonymized UI interaction metrics | Append-only |
+| `simulation_scenarios` | Scenario specifications and seeds (FR-3.16) | Append-only after finalization |
+| `scenario_runs` | Executed scenario run records and aggregated outputs (FR-3.16) | Append-only |
+| `synthetic_cohorts` | Digital twin cohort definitions and member identities (FR-3.13) | Append-only |
+| `chemistry_profiles` | Generated clinical chemistry vectors (FR-3.12) | Append-only |
+| `pkpd_worklists` | In silico PK/PD pipetting manifests (FR-3.11) | Append-only after finalization |
+| `cfdna_sandbox_runs` | MRD/cfDNA sandbox runs and LOD results (FR-3.14) | Append-only |
+| `clinical_text_outputs` | LLM/RAG generated narratives and reports with provenance (FR-3.15) | Append-only |
+| `llm_runs` | LLM invocation metadata (model, provider, prompt hash) (FR-3.15) | Append-only |
+| `rag_templates` | Static RAG template registry metadata (FR-3.15) | Read-only after bulk load |
 
 ### 6.2 Data Integrity Constraints
 
@@ -392,6 +527,9 @@ where:
 - Telemetry observations: 7 years (standard medical device record retention).
 - Simulation states: 90 days (non-regulatory, purgeable).
 - Human factors metrics: 2 years (or duration of associated validation study).
+- Simulation scenarios & runs: 90 days (non-regulatory, purgeable).
+- Synthetic cohort and chemistry data: 90 days (non-regulatory, purgeable).
+- LLM-generated clinical text outputs: 90 days (non-regulatory, purgeable; synthetic only).
 
 ---
 
@@ -429,6 +567,13 @@ where:
 | **OQ-14** | JWT authentication — expired token | Request returns HTTP 401 with `WWW-Authenticate: Bearer` header |
 | **OQ-15** | JWT authentication — no token | Request returns HTTP 401 |
 | **OQ-16** | Pulse Engine initialization | `import PyPulse; engine = PulseEngine()` creates valid instance; initial state serializes to valid JSON without error |
+| **OQ-17** | PK/PD loop: substance registered → plasma curve → dilution worklist | Worklist generated for 96/384-well plate; validates against FR-3.4 schema; HTTP 201 |
+| **OQ-18** | Clinical chemistry bundle assembly | Multi-modal Bundle (chemistry + ClinVar) validates against FHIR R4 (FR-3.7.1); ingestion webhook returns success |
+| **OQ-19** | Digital twin cohort generation | N synthetic patients produce FHIR `Observation` streams validating per FR-3.7.1; all flagged `synthetic=true` |
+| **OQ-20** | MRD/LOD sandbox | Stressor injection alters plasma volume; cfDNA model reports pass/fail vs configured LOD; response captured |
+| **OQ-21** | LLM provider abstraction (local↔remote) | Switching provider via config yields valid narrative generation from both endpoints without code change |
+| **OQ-22** | RAG template merge (ClinVar → pathology report) | Generated Molecular Pathology Summary Report contains merged structured variant data from template |
+| **OQ-23** | Scenario determinism | Same seed + config reproduces identical deterministic-module output hashes across repeated runs |
 
 ### 7.3 Performance Qualification (PQ)
 
@@ -440,6 +585,8 @@ where:
 | **PQ-4** | Sustained 24-hour telemetry ingestion at 100,000 points/sec | Zero database deadlocks; memory growth ≤ 5%; audit log grows linearly without insert degradation |
 | **PQ-5** | Barcode validation: 96-index plate (4,560 pairwise comparisons) | All pairwise Hamming distances computed within 500 ms |
 | **PQ-6** | Simulated multi-patient ventilator stress event | Dashboard maintains ≥ 55 fps while rendering 10 concurrent pressure waveforms from Pulse Engine output |
+| **PQ-7** | LLM narrative generation under load: 50 concurrent scenario runs invoking LLM | Telemetry ingestion throughput (NFR-P1) and WebSocket relay (NFR-P3) remain within SLA; LLM latency isolated (NFR-P7) |
+| **PQ-8** | Integrated multi-feature scenario: PK/PD + chemistry + digital twin + MRD + LLM to LIMS webhook | End-to-end scenario completes; all downstream ingestion responses captured; ≥ 55 fps dashboard under concurrent load |
 
 ---
 
@@ -461,6 +608,12 @@ where:
 | FR-3.8.3 (Hash Chaining) | Audit Trail Integrity | pgcrypto Hash Pipeline | OQ-9 |
 | FR-3.8.5 (JWT) | Access Control | Auth Middleware | OQ-13, OQ-14, OQ-15 |
 | FR-3.9.1 (Human Factors) | Usability Validation | Metrics Collector | — |
+| FR-3.11 (PK/PD Loop) | In Silico Lab Automation | PK/PD Integration Module | OQ-17 |
+| FR-3.12 (Clinical Chemistry) | Multi-Modal Diagnostics | Chemistry Generation Engine | OQ-18 |
+| FR-3.13 (Digital Twin Cohort) | Biopharma Synthetic Data | Cohort Generator | OQ-19 |
+| FR-3.14 (MRD Sandbox) | Precision Oncology LOD | cfDNA Sandbox | OQ-20 |
+| FR-3.15 (LLM/RAG Text) | Unstructured Text Simulation | AI Text Gateway | OQ-21, OQ-22 |
+| FR-3.16 (Scenario Framework) | End-to-End Validation Harness | Scenario Orchestrator | OQ-23 |
 
 ---
 
@@ -480,6 +633,7 @@ BioSync-Gateway/
 │   │   │   ├── MicroplateEditor/        # CSS Grid plate components
 │   │   │   ├── AuditViewer/             # Hash chain inspection UI
 │   │   │   └── AdminConsole/            # System configuration UI
+│   │   ├── ScenarioDesigner/            # Integrated simulation scenario assembly UI (FR-3.16)
 │   │   ├── providers/
 │   │   │   └── chart-provider.ts        # ECharts/SciChart abstraction
 │   │   ├── hooks/
@@ -497,6 +651,8 @@ BioSync-Gateway/
 │   │   │   │   ├── plates.py            # Microplate CRUD
 │   │   │   │   ├── fhir.py              # FHIR resource endpoints
 │   │   │   │   └── audit.py             # Audit log query endpoints
+│   │   │   ├── simulation.py            # PK/PD, chemistry, digital twin, MRD, scenario endpoints
+│   │   │   └── ai.py                     # LLM/RAG text generation endpoints
 │   │   │   ├── auth.py                  # JWT middleware
 │   │   │   └── dependencies.py          # FastAPI dependency injection
 │   │   ├── engine/
@@ -504,6 +660,15 @@ BioSync-Gateway/
 │   │   │   ├── barcode.py               # Hamming distance engine
 │   │   │   ├── dilution.py              # Dilution solver
 │   │   │   └── signal.py                # EMA filter
+│   │   ├── simulation/
+│   │   │   ├── pkpd.py                  # In silico PK/PD lab loop
+│   │   │   ├── chemistry.py             # Closed-loop clinical chemistry generation
+│   │   │   ├── digital_twin.py          # Synthetic FHIR digital twin cohorts
+│   │   │   ├── mrd_sandbox.py           # Liquid biopsy / MRD analytical sandbox
+│   │   │   └── scenarios.py             # Integrated simulation scenario orchestrator
+│   │   ├── ai/
+│   │   │   ├── llm_gateway.py           # OpenAI-compatible LLM provider abstraction
+│   │   │   └── rag.py                   # Local RAG template retrieval & merge
 │   │   ├── fhir_validator.py            # fhir.resources Pydantic validation
 │   │   ├── external/
 │   │   │   ├── accessgudid.py           # FDA AccessGUDID client
@@ -518,7 +683,9 @@ BioSync-Gateway/
 │   │   ├── 001-extensions.sql           # pgcrypto enablement
 │   │   ├── 002-schema.sql               # Core table DDL
 │   │   ├── 003-triggers.sql             # BEFORE UPDATE/DELETE triggers
-│   │   └── 004-seed-barcodes.sql        # Illumina barcode dictionary
+│   │   ├── 004-seed-barcodes.sql        # Illumina barcode dictionary
+│   │   ├── 005-simulation-schema.sql    # Scenario, cohort, chemistry, PK/PD, MRD tables
+│   │   └── 006-ai-schema.sql            # Clinical text output, llm_runs, rag_templates tables
 │   └── verify/
 │       └── hash-chain-check.sql         # Nightly integrity verification
 ├── tests/
@@ -533,14 +700,31 @@ BioSync-Gateway/
 │   │   ├── test_audit_triggers.py
 │   │   ├── test_hash_chain.py
 │   │   ├── test_fhir_validation.py
-│   │   └── test_jwt_auth.py
+│   │   ├── test_jwt_auth.py
+│   │   ├── test_pkpd_loop.py
+│   │   ├── test_chemistry_generation.py
+│   │   ├── test_digital_twin.py
+│   │   ├── test_mrd_sandbox.py
+│   │   ├── test_llm_rag.py
+│   │   └── test_scenarios.py
 │   └── PQ/                              # Performance Qualification
 │       ├── locustfile.py
 │       ├── test_multi_patient_load.py
-│       └── test_hash_scan_perf.py
+│       ├── test_hash_scan_perf.py
+│       ├── test_scenario_load.py        # Integrated multi-feature scenario load
+│       └── test_llm_isolation.py        # LLM latency isolation under load
 ├── docker-compose.yml
 └── .env.example
 ```
+
+---
+
+## 10. Revision History
+
+| Version | Date | Author | Summary of Change |
+|:--------|:-----|:-------|:------------------|
+| 1.0 | 2026-07-13 | Seth Nenninger | Initial SRS baseline (domains 1–6) |
+| 1.1 | 2026-07-24 | Seth Nenninger | Added advanced simulation & analytics domains (FR-3.11 PK/PD Lab Loop, FR-3.12 Clinical Chemistry, FR-3.13 Digital Twin Cohorts, FR-3.14 MRD Sandbox), FR-3.15 LLM/RAG Text Simulation Gateway, and FR-3.16 Integrated Simulation Scenario Framework. Expanded scope, definitions, architecture, constraints, NFRs, data schema, validation protocols, traceability, and repository structure. **Deferred:** implementation of these features is scheduled only after all baseline (v1.0) capabilities are complete. |
 
 ---
 

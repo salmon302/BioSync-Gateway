@@ -16,6 +16,7 @@ interface HumanFactorsContextType {
   isCollecting: boolean
   exportMetrics: () => string
   downloadMetrics: () => void
+  flushEvents: () => void
 }
 
 const HumanFactorsContext = createContext<HumanFactorsContextType | undefined>(undefined)

@@ -14,8 +14,18 @@ Create Date: 2026-07-14
 """
 from alembic import op
 import sqlalchemy as sa
-from sqlalchemy.dialects.postgresql import UUID, JSONB, ARRAY
+from sqlalchemy.dialects.postgresql import UUID, JSONB, ARRAY, TIMESTAMP
 from sqlalchemy import func, text
+
+# SQLAlchemy 2.0 compatibility: TIMESTAMPTZ was removed from both the generic
+# `sqlalchemy` namespace and the postgresql dialect in 2.0. Alias it as a
+# timezone-aware TIMESTAMP so `sa.TIMESTAMPTZ()` keeps working and still
+# emits TIMESTAMPTZ DDL. JSONB is re-exposed on `sa` for the same reason.
+class _TIMESTAMPTZ(TIMESTAMP):
+    def __init__(self, timezone=True, precision=None, **kw):
+        super().__init__(timezone=timezone, precision=precision, **kw)
+sa.TIMESTAMPTZ = _TIMESTAMPTZ
+sa.JSONB = JSONB
 
 # revision identifiers, used by Alembic.
 revision = '0001_initial'

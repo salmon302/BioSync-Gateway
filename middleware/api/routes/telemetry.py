@@ -295,3 +295,71 @@ async def get_ingestion_stats():
         "ws_relay_latency_ms": snapshot["websocket"]["relay_latency_ms"],
     }
 
+
+@router.get("/history")
+async def get_telemetry_history(
+    db: Session = Depends(get_db),
+    channel: Optional[str] = None,
+    from_time: Optional[str] = None,
+    to_time: Optional[str] = None,
+    threshold: int = 1000,
+    current_user=Depends(require_scope("telemetry_read"))
+):
+    """
+    Retrieve historical telemetry with LTTB downsampling.
+    Implements SRS FR-3.1.2 — 60 fps at 100k pts/s via LTTB downsampling.
+
+    Args:
+        channel: Optional channel filter (pressure, flow, hr, spo2).
+        from_time: ISO timestamp filter (inclusive).
+        to_time: ISO timestamp filter (inclusive).
+        threshold: Maximum number of points to return per channel (default 1000).
+
+    Returns:
+        Dict with 'channels' mapping channel name to downsampled time-series.
+    """
+    from engine.lttb import downsample_telemetry
+    from sqlalchemy import func
+
+    query = db.query(Observation).filter(Observation.observation_code.isnot(None))
+
+    if channel:
+        query = query.filter(Observation.observation_code.ilike(f"%{channel}%"))
+    if from_time:
+        query = query.filter(Observation.timestamp >= from_time)
+    if to_time:
+        query = query.filter(Observation.timestamp <= to_time)
+
+    # Limit to a reasonable window to avoid loading millions of rows
+    # (LTTB handles the downsampling; we cap the DB query for memory safety)
+    query = query.order_by(Observation.timestamp.desc()).limit(threshold * 10)
+
+    observations = query.all()
+
+    # Group by channel code
+    channels_data: dict = {}
+    for obs in observations:
+        code = obs.observation_code or "unknown"
+        if code not in channels_data:
+            channels_data[code] = []
+        channels_data[code].append({
+            "timestamp": obs.timestamp.isoformat() if obs.timestamp else None,
+            "value": obs.value_quantity.get("value") if obs.value_quantity else None,
+            "unit": obs.unit,
+            "observation_uid": obs.observation_uid,
+        })
+
+    # Apply LTTB downsampling per channel
+    downsampled = {}
+    for ch_name, points in channels_data.items():
+        if len(points) <= threshold:
+            downsampled[ch_name] = points
+        else:
+            downsampled[ch_name] = downsample_telemetry(points, threshold)
+
+    return {
+        "channels": downsampled,
+        "total_points": sum(len(v) for v in downsampled.values()),
+        "downsampled_to": threshold,
+    }
+
