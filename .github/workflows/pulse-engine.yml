@@ -1,9 +1,10 @@
 name: Pulse Engine CI (Real PyPulse)
 
-# Builds the native PyPulse.so from Kitware Pulse source (Dockerfile.pulse) and
-# runs the real-engine qualification suite (IQ-4, OQ-16, PQ-2, PQ-6) against it.
-# Isolated from the main push CI so a missing/blocked upstream Pulse source
-# never breaks ordinary builds; run on demand or nightly.
+# Builds the native PyPulse from the LOCALLY VENDORED `.pulse` source
+# (Dockerfile.pulse, repo-root build context) and runs the real-engine
+# qualification suite (IQ-4, OQ-16, PQ-2, PQ-6) against it. Isolated from the
+# main push CI so a heavy native compile never blocks ordinary builds; run on
+# demand or nightly.
 
 on:
   workflow_dispatch:
@@ -22,7 +23,10 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Build Pulse engine image (compiles PyPulse.so)
-        run: docker build -f middleware/Dockerfile.pulse -t biosync-pulse:ci middleware
+        # VARIANT=git clones the pinned upstream tag (the vendored .pulse/ is
+        # gitignored and absent from the CI checkout). Local builds use the
+        # default VARIANT=local (COPY .pulse).
+        run: docker build -f middleware/Dockerfile.pulse --build-arg VARIANT=git -t biosync-pulse:ci .
 
       - name: Run IQ-4 / OQ-16 / PQ-2 / PQ-6 against the real engine
         run: |

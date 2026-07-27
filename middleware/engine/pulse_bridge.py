@@ -6,14 +6,13 @@ The v1.1 analytics modules synthesize their outputs deterministically from a
 seed (SRS C7). This bridge lets those modules *optionally* drive, or pull from,
 a live Kitware Pulse Physiology Engine simulation when one is available.
 
-Activation is strictly opt-in: `BIOSSYNC_REAL_PULSE=1` (default OFF) AND
-The ``Pulse`` Python bindings (a.k.a. PyPulse) must be importable (the native
-engine compiled by Dockerfile.pulse).
-When the bridge is inactive or PyPulse is missing, every function returns
-``None`` and callers keep their seed-deterministic synthesis (C7 preserved).
-The heavy ``import Pulse`` (PyPulse) only happens inside the worker functions and only
-when the bridge is explicitly enabled, so importing this module is cheap and
-never pulls in the native engine.
+R1 (remove synthetic fallback dependence): the REAL engine is used
+AUTOMATICALLY whenever the ``Pulse`` Python bindings (a.k.a. PyPulse) are
+importable. Seed-deterministic synthesis is now an EXPLICIT opt-in controlled
+by ``BIOSSYNC_SYNTHETIC=1``; when set, this bridge reports the engine as
+unavailable and callers keep their seed synthesis (C7 preserved). When the real
+engine is unavailable and synthesis is not explicitly requested, the bridge
+logs a loud warning so the fallback to seed-synthesis is never silent.
 """
 from __future__ import annotations
 
@@ -23,19 +22,34 @@ from typing import Any, Dict, Optional
 
 logger = logging.getLogger(__name__)
 
-# Opt-in only. Default OFF so deterministic seed synthesis stays the default.
-ENABLE_REAL_PULSE = os.getenv("BIOSSYNC_REAL_PULSE", "0") == "1"
+# Deterministic seed synthesis is now an EXPLICIT opt-in (R1). Default OFF so
+# the real engine is the active path whenever it is importable.
+SYNTHETIC_ONLY = os.getenv("BIOSSYNC_SYNTHETIC", "0") == "1"
 
 
 def real_pulse_available() -> bool:
-    """True only when the bridge is enabled AND PyPulse imports successfully."""
-    if not ENABLE_REAL_PULSE:
+    """True when the real Pulse engine is importable AND not overridden.
+
+    The real engine is the default (R1). It is bypassed only when
+    ``BIOSSYNC_SYNTHETIC=1`` is set, or when the ``Pulse`` package cannot be
+    imported (in which case a loud warning is emitted so the fallback to
+    seed-synthesis is never silent).
+    """
+    if SYNTHETIC_ONLY:
+        logger.warning(
+            "BIOSSYNC_SYNTHETIC=1 set: using deterministic seed synthesis; "
+            "the real Kitware Pulse Engine is DISABLED (R1 synthetic opt-in)."
+        )
         return False
     try:
-        import Pulse  # noqa: F401 - native engine; import only when enabled
+        import Pulse  # noqa: F401 - native engine
         return True
     except Exception as exc:  # pragma: no cover - depends on native build
-        logger.warning("BIOSSYNC_REAL_PULSE=1 but Pulse (PyPulse) unavailable: %s", exc)
+        logger.warning(
+            "Pulse (PyPulse) bindings unavailable; deterministic seed synthesis "
+            "will be used as a fallback. Compile PyPulse via Dockerfile.pulse to "
+            "enable the real engine. ImportError: %s", exc,
+        )
         return False
 
 

@@ -25,6 +25,7 @@ MANIFEST
 .coverage
 htmlcov/
 .venv/
+.pulse/
 venv/
 ENV/
 env/

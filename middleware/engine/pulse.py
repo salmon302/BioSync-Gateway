@@ -15,11 +15,13 @@ Design notes
   is absent. If the engine import fails, initialization fails *closed* (no
   synthetic mock) per SRS C1.
 * The analytics modules (``simulation/*.py``) retain their own deterministic
-  seed-synthesis as a separate reproducibility feature (SRS C7) and only
-  consume the live engine when ``BIOSSYNC_REAL_PULSE=1`` (see
-  ``engine/pulse_bridge.py``). That bridge degrades gracefully to synthesis if
-  the engine is unavailable, preserving C7 in dev while making the *real*
-  physiology the active path in the deployed image (closing REMAINING_WORK R1).
+  seed-synthesis as a separate reproducibility feature (SRS C7). They consume
+  the live engine **automatically whenever it is importable** (see
+  ``engine/pulse_bridge.py``); deterministic synthesis is now an *explicit*
+  opt-in (``BIOSSYNC_SYNTHETIC=1``). This removes the synthetic fallback
+  dependence (closing REMAINING_WORK R1): the real physiology is the active
+  path in the deployed image, and synthesis is used only when the engine is
+  genuinely absent or explicitly requested.
 """
 from __future__ import annotations
 

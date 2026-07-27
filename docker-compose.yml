@@ -42,8 +42,10 @@ services:
     build:
       context: ./middleware
       dockerfile: ${MIDDLEWARE_DOCKERFILE:-Dockerfile}
-      # Use Dockerfile.pulse for production with Kitware Pulse Engine:
-      #   MIDDLEWARE_DOCKERFILE=Dockerfile.pulse docker compose up --build
+      # Production build with the REAL Kitware Pulse Engine:
+      #   docker build -f middleware/Dockerfile.pulse -t biosync-pulse .
+      # (Build context must be the repo root so the vendored .pulse source is
+      #  reachable; `docker compose` keeps the plain middleware context.)
     container_name: biosync-middleware
     environment:
       - DATABASE_URL=postgresql://biosync_user:${DB_PASSWORD:-biosync_secure_password}@db:5432/biosync
@@ -58,10 +60,11 @@ services:
       - OPENFDA_API_KEY=${OPENFDA_API_KEY:-}
       - ACCESSGUDID_API_KEY=${ACCESSGUDID_API_KEY:-}
       - BIOSYNC_CACHE_DIR=/app/cache
-      # Use the real Kitware Pulse engine when the image was built with
-      # MIDDLEWARE_DOCKERFILE=Dockerfile.pulse (R1). Degrades gracefully to
-      # seed-synthesis if the engine import fails.
-      - BIOSSYNC_REAL_PULSE=1
+      # R1: with the Dockerfile.pulse image the REAL Kitware Pulse engine is
+      # used automatically whenever importable. Deterministic seed-synthesis is
+      # an explicit opt-in (BIOSSYNC_SYNTHETIC=1). Falls back to a loud warning
+      # + synthesis only if the engine import genuinely fails.
+      - BIOSSYNC_SYNTHETIC=0
     ports:
       - "8000:8000"
     volumes:

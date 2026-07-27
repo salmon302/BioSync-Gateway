@@ -3,23 +3,31 @@
 #
 # Implements SRS FR-3.6.1-3.6.5 / FR-3.11-3.14 and closes REMAINING_WORK R1
 # (physiological fidelity). The native engine is COMPILED FROM SOURCE in stage
-# 1 (validated stable tag) and copied into a slim Python 3.11 runtime in stage
-# 2. The builder and runtime use the SAME Python (3.11) so the compiled
-# extension module is ABI-compatible.
+# 1 and copied into a slim Python 3.11 runtime in stage 2. Builder and runtime
+# use the SAME Python (3.11) so the compiled extension module is ABI-compatible.
 #
-# Build / run:
-#   docker build -f middleware/Dockerfile.pulse -t biosync-pulse middleware
-#   MIDDLEWARE_DOCKERFILE=Dockerfile.pulse docker compose up --build
+# Build context MUST be the repository root so `.pulse/` is reachable.
+# Source selection (build arg VARIANT, default "local"):
+#   local (default): COPY the vendored .pulse/ source (offline, reproducible) --
+#                     this is what you use with the engine you downloaded.
+#   git:             clone the pinned PULSE_VERSION tag from gitlab (used by CI,
+#                     because .pulse/ is gitignored and absent from the checkout).
+#
+#   Local:  docker build -f middleware/Dockerfile.pulse -t biosync-pulse .
+#   CI:     docker build -f middleware/Dockerfile.pulse --build-arg VARIANT=git -t biosync-pulse:ci .
 #
 # Acceptance (R1): `import Pulse` succeeds in the runtime image and
-# IQ-4 / OQ-16 / PQ-2 / PQ-6 pass against the real engine.
+# IQ-4 / OQ-16 / PQ-2 / PQ-6 pass against the real engine (see
+# .github/workflows/pulse-engine.yml and SNDEV/scripts/build-pulse.sh).
 
-# =============================================================================
-# Stage 1 - compile Kitware Pulse Physiology Engine from source
-# =============================================================================
-FROM python:3.11-bullseye AS pulse-builder
-
+ARG VARIANT=local
 ARG PULSE_VERSION=REL_4_3_2
+
+# =============================================================================
+# Stage 1a - compile from the LOCALLY VENDORED .pulse source (default)
+# =============================================================================
+FROM python:3.11-bullseye AS pulse-builder-local
+
 ENV DEBIAN_FRONTEND=noninteractive
 
 # Build toolchain. The Pulse superbuild downloads/compiles its own
@@ -30,13 +38,43 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libssl-dev zlib1g-dev libcurl4-openssl-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Clone the tagged, validated stable release (ABI matched to python:3.11).
+# Copy the locally-vendored engine source (downloaded into .pulse/).
 WORKDIR /source
-RUN git clone --depth 1 --branch ${PULSE_VERSION} \
-        https://gitlab.kitware.com/physiology/engine.git .
+COPY .pulse /source
 
 # Configure + build. Java/C# APIs are disabled to cut build time + JDK deps.
-# Output is installed to /pulse (bin -> shared libs, python -> bindings).
+# Output is installed to /pulse (python -> bindings, bin -> shared libs).
+RUN mkdir -p /build /pulse \
+    && cd /build \
+    && cmake -DPulse_PYTHON_API=ON \
+             -DPulse_JAVA_API=OFF \
+             -DPulse_CSHARP_API=OFF \
+             -DCMAKE_INSTALL_PREFIX=/pulse \
+             -DCMAKE_BUILD_TYPE=Release \
+             -DPYTHON_EXECUTABLE=/usr/local/bin/python3.11 \
+             /source \
+    && make -j"$(nproc)" \
+    && ( test -e /pulse/python/Pulse/__init__.py || make install ) \
+    && cd / && rm -rf /build
+
+# =============================================================================
+# Stage 1b - compile from the pinned upstream tag (CI; .pulse absent in checkout)
+# =============================================================================
+FROM python:3.11-bullseye AS pulse-builder-git
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        git wget build-essential cmake \
+        unzip pkg-config ca-certificates \
+        libssl-dev zlib1g-dev libcurl4-openssl-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Clone the validated stable release (ABI matched to python:3.11).
+WORKDIR /source
+RUN git clone --depth 1 --branch ${PULSE_VERSION} \
+        https://gitlab.kitware.com/physiology/engine.git /source
+
 RUN mkdir -p /build /pulse \
     && cd /build \
     && cmake -DPulse_PYTHON_API=ON \
@@ -53,6 +91,8 @@ RUN mkdir -p /build /pulse \
 # =============================================================================
 # Stage 2 - slim runtime with compiled engine + application
 # =============================================================================
+FROM pulse-builder-${VARIANT} AS pulse-builder
+
 FROM python:3.11-slim
 
 WORKDIR /app
@@ -71,16 +111,17 @@ RUN ldconfig
 # Expose the compiled bindings to the interpreter.
 ENV PYTHONPATH=/pulse/python
 ENV LD_LIBRARY_PATH=/pulse/bin:/usr/local/lib:${LD_LIBRARY_PATH}
-# Use the real engine when present (real_pulse_available() degrades gracefully
-# to the seed-synthesis fallback if the import fails).
-ENV BIOSSYNC_REAL_PULSE=1
+
+# R1: the REAL engine is used automatically whenever `import Pulse` succeeds.
+# Deterministic seed-synthesis is now the EXPLICIT opt-in (set to 1 to force it).
+ENV BIOSSYNC_SYNTHETIC=0
 
 # Application dependencies (pandas is required by Pulse's pull_data()).
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+COPY middleware/requirements.txt /app/requirements.txt
+RUN pip install --no-cache-dir -r /app/requirements.txt
 
 # Application code.
-COPY . .
+COPY middleware /app
 
 # IQ-4 build gate: the real engine MUST import in the runtime image.
 RUN python -c "import Pulse; from Pulse import Engine; print('PyPulse (Pulse) OK:', Pulse.__file__)"
