@@ -255,35 +255,24 @@ def run_oq1_test_vectors() -> Tuple[bool, List[str]]:
     return len(failures) == 0, failures
 
 
-# Illumina TruSeq 8-base barcode sequences (authentic, validated for min Hamming distance >= 3)
-# These are the built-in fallback set; in production, load_barcode_set() queries
-# the barcode_indices table seeded from database/seeds/illumina_udis_v1.0.0.json
-# (SRS FR-3.3.4 / C5). Deprecated: prefer the DB-backed path.
+# Illumina TruSeq HT 8-base i7 UDI barcode sequences (authentic, from doc
+# 1000000002694 D701-D712). These are the built-in fallback set used only when
+# the database is unavailable; in production, load_barcode_set() queries the
+# barcode_indices table seeded from database/seeds/illumina_udis_v1.0.0.json
+# (SRS FR-3.3.4 / C5). The DB-backed set is the authoritative, authentic source.
 TRUSEQ_BARCODES = {
-    'HT1': 'GATTCGAA',
-    'HT2': 'ACAAGGTG',
-    'HT3': 'CACGATCG',
-    'HT4': 'TAGTCCAC',
-    'HT5': 'CGCGAGGC',
-    'HT6': 'AATATTTA',
-    'HT7': 'GACCTCGC',
-    'HT8': 'TGTCGGTA',
-    'HT9': 'GCATAGCA',
-    'HT10': 'GTCAAAGA',
-    'HT11': 'TGTGAAAT',
-    'HT12': 'CATAAACC',
-    'HT13': 'GCGCCATC',
-    'HT14': 'ACCCTAAT',
-    'HT15': 'GGAGGAAC',
-    'HT16': 'GCTAGAGT',
-    'HT17': 'ATTGTAGC',
-    'HT18': 'CCGGGAAC',
-    'HT19': 'AAAACTGC',
-    'HT20': 'GAGGGGTG',
-    'HT21': 'AAATCCTC',
-    'HT22': 'GTAACTTG',
-    'HT23': 'TACGATCC',
-    'HT24': 'CGTACGAT',
+    'D701': 'ATTACTCG',
+    'D702': 'TCCGGAGA',
+    'D703': 'CGCTCATT',
+    'D704': 'GAGATTCC',
+    'D705': 'ATTCAGAA',
+    'D706': 'GAATTCGT',
+    'D707': 'CTGAAGCT',
+    'D708': 'TAATGCGC',
+    'D709': 'CGGCTATG',
+    'D710': 'TCCGCGAA',
+    'D711': 'TCTCGCGC',
+    'D712': 'AGCGATAG',
 }
 
 # Barcode sets registry - maps set name to barcode dictionary

@@ -1,0 +1,68 @@
+/* SPDX-License-Identifier: MIT */
+/* Analytics Results styles — Phase 3 read-only module viewers */
+
+.analytics-results {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 1.5rem 1rem 3rem;
+}
+
+.analytics-results h2 {
+  margin-bottom: 0.25rem;
+}
+
+.analytics-results .hint {
+  color: #6b7280;
+  margin-top: 0;
+  font-size: 0.9rem;
+}
+
+.analytics-results .status {
+  font-size: 0.8rem;
+  color: #6b7280;
+  margin-bottom: 0.5rem;
+}
+
+.analytics-results .error {
+  color: #b91c1c;
+  font-weight: 600;
+  margin-bottom: 0.5rem;
+}
+
+.analytics-results section {
+  margin: 1.5rem 0;
+  border-top: 1px solid #e2e8f0;
+  padding-top: 0.75rem;
+}
+
+.analytics-results section h3 {
+  margin: 0 0 0.5rem;
+}
+
+.analytics-results .empty {
+  color: #94a3b8;
+  font-style: italic;
+}
+
+.analytics-results .results-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.82rem;
+}
+
+.analytics-results .results-table th,
+.analytics-results .results-table td {
+  text-align: left;
+  padding: 0.4rem 0.6rem;
+  border-bottom: 1px solid #eef2f7;
+}
+
+.analytics-results .results-table th {
+  background: #f8fafc;
+  font-weight: 600;
+  color: #334155;
+}
+
+.analytics-results .results-table tbody tr:nth-child(even) {
+  background: #fbfdff;
+}

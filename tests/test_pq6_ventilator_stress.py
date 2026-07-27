@@ -10,7 +10,7 @@ import pytest
 import time
 
 # Skip all tests if PyPulse is not available
-pytest.importorskip("PyPulse")
+pytest.importorskip("Pulse")
 
 from middleware.engine.pulse import SimulationManager, PatientConfig
 

@@ -16,6 +16,9 @@ python-multipart==0.0.6
 # FHIR
 fhir.resources==7.0.0
 
+# LLM / RAG Gateway (SRS FR-3.15) — OpenAI-compatible client abstraction
+openai==1.55.0
+
 # Utilities
 pydantic==2.5.3
 pydantic-settings==2.1.0
@@ -24,6 +27,9 @@ httpx==0.26.0
 
 # NumPy (for algorithmic engines)
 numpy==1.26.4
+
+# Pandas - required by Kitware Pulse's DataRequestManager.pull_data() (DataFrame)
+pandas==2.2.2
 
 # Testing
 pytest==7.4.4

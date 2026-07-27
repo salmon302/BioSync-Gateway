@@ -1,0 +1,145 @@
+/* SPDX-License-Identifier: MIT */
+/* Scenario Designer styles — FR-3.16.5 / NFR-U4 */
+
+.scenario-designer {
+  max-width: 880px;
+  margin: 0 auto;
+  padding: 1.5rem 1rem 3rem;
+}
+
+.scenario-designer h2 {
+  margin-bottom: 0.25rem;
+}
+
+.scenario-designer .hint {
+  color: #6b7280;
+  margin-top: 0;
+  font-size: 0.9rem;
+}
+
+.scenario-designer label {
+  display: block;
+  margin: 0.9rem 0 0.2rem;
+  font-weight: 600;
+  font-size: 0.85rem;
+}
+
+.scenario-designer input,
+.scenario-designer select {
+  display: block;
+  width: 100%;
+  padding: 0.5rem;
+  margin-top: 0.3rem;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  font-size: 0.95rem;
+  box-sizing: border-box;
+}
+
+.scenario-designer fieldset {
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  margin: 1.1rem 0;
+  padding: 0.6rem 0.9rem 0.9rem;
+}
+
+.scenario-designer legend {
+  font-weight: 700;
+  font-size: 0.85rem;
+  padding: 0 0.4rem;
+}
+
+.scenario-designer .module-check {
+  display: flex;
+  align-items: center;
+  font-weight: 400;
+  margin: 0.35rem 0;
+}
+
+.scenario-designer .module-check input {
+  width: auto;
+  margin: 0 0.5rem 0 0;
+}
+
+.scenario-designer .downstream-row {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.scenario-designer .downstream-row select {
+  flex: 0 0 180px;
+}
+
+.scenario-designer button {
+  margin-top: 1.2rem;
+  padding: 0.7rem 1.4rem;
+  background: #0f766e;
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  font-size: 1rem;
+  cursor: pointer;
+}
+
+.scenario-designer button:disabled {
+  background: #94a3b8;
+  cursor: not-allowed;
+}
+
+.scenario-designer .status {
+  margin-top: 1rem;
+  padding: 0.6rem 0.8rem;
+  background: #f1f5f9;
+  border-radius: 6px;
+  font-size: 0.9rem;
+}
+
+.scenario-designer .results {
+  margin-top: 1.5rem;
+  border-top: 1px solid #e2e8f0;
+  padding-top: 1rem;
+}
+
+.scenario-designer .results pre {
+  background: #0b1220;
+  color: #e2e8f0;
+  padding: 0.8rem;
+  border-radius: 8px;
+  max-height: 360px;
+  overflow: auto;
+  font-size: 0.78rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.scenario-designer .results h4 {
+  margin-bottom: 0.3rem;
+}
+
+.scenario-designer .badge {
+  padding: 0.1rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.8rem;
+}
+
+.scenario-designer .badge.completed {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.scenario-designer .badge.failed {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.scenario-designer .badge.running,
+.scenario-designer .badge.queued {
+  background: #fef9c3;
+  color: #854d0e;
+}
+
+.scenario-designer .error {
+  margin-top: 0.6rem;
+  color: #b91c1c;
+  font-weight: 600;
+}

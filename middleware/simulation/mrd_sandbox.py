@@ -428,6 +428,23 @@ def run_mrd_sandbox(
     Returns a structured result consumed by :func:`generate_cfdna_sandbox_run`
     and the API layer.
     """
+    # FR-3.14.1 (optional real Pulse Engine): when active and no explicit
+    # baseline is supplied, use a live Pulse baseline as the physiology the
+    # stressor alters. Seed-deterministic synthesis stays the default (C7).
+    if baseline is None:
+        try:
+            from engine.pulse_bridge import real_pulse_available, pulse_baseline
+
+            if real_pulse_available():
+                _live = pulse_baseline(patient_id or "mrd")
+                if _live:
+                    baseline = {
+                        **DEFAULT_BASELINE_PHYSIOLOGY,
+                        **{k: _live[k] for k in DEFAULT_BASELINE_PHYSIOLOGY if k in _live},
+                    }
+        except Exception:  # pragma: no cover - only active with real engine
+            pass
+
     phys = dict(baseline) if baseline else dict(DEFAULT_BASELINE_PHYSIOLOGY)
     altered = apply_stressor(phys, stressor)
 

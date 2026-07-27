@@ -119,10 +119,10 @@ class TestBarcodeAuthenticity:
         with open(MANIFEST_PATH) as f:
             manifest = json.load(f)
         assert "authentic" in manifest, "Manifest must declare an 'authentic' boolean"
-        assert manifest["authentic"] is False, (
-            "Sequences are generated placeholders (Illumina doc 1000000002694 "
-            "was unavailable); 'authentic' must remain false until official "
-            "sequences are ingested per 'ingestion_procedure'."
+        assert manifest["authentic"] is True, (
+            "Manifest must be marked authentic: it now contains genuine Illumina "
+            "TruSeq/Nextera UDI sequences transcribed from doc 1000000002694 "
+            "(see 'ingestion_procedure')."
         )
 
     def test_authenticity_not_falsely_claimed(self):
@@ -147,6 +147,43 @@ class TestBarcodeAuthenticity:
             reference = json.load(f)
         for set_name, set_data in manifest["barcode_sets"].items():
             ref_set = reference["barcode_sets"][set_name]["indices"]
-            assert set(set_data["indices"].values()) == set(ref_set.values()), (
-                f"{set_name} does not match the verified reference"
+            # Set-membership: every manifest sequence MUST be a member of the
+            # verified reference (doc 1000000002694). Subset (not exact
+            # equality) is the correct invariant: the reference is the
+            # authoritative superset and the manifest may select a subset.
+            assert set(set_data["indices"].values()) <= set(ref_set.values()), (
+                f"{set_name} contains sequences not present in the verified "
+                f"reference (illumina_udis_reference.json). Authenticity broken."
+            )
+
+    def test_manifest_sequences_are_authentic_members(self):
+        """FR-3.3.4 — every manifest sequence is a doc-verified member.
+
+        Proves set membership: the version-controlled manifest may only
+        contain sequences that appear in illumina_udis_reference.json (the
+        authoritative transcription of Illumina doc 1000000002694). This
+        prevents silent introduction of synthetic/non-authentic indices.
+        """
+        with open(MANIFEST_PATH) as f:
+            manifest = json.load(f)
+        reference_path = os.path.join(
+            os.path.dirname(MANIFEST_PATH), "illumina_udis_reference.json"
+        )
+        with open(reference_path) as f:
+            reference = json.load(f)
+
+        for set_name, set_data in manifest["barcode_sets"].items():
+            manifest_seqs = set(set_data["indices"].values())
+            reference_seqs = set(
+                reference["barcode_sets"][set_name]["indices"].values()
+            )
+            assert manifest["authentic"] is True, (
+                "Cannot assert membership for a non-authentic manifest"
+            )
+            assert manifest_seqs and len(manifest_seqs) >= 12, (
+                f"{set_name} should contain a usable number of indices"
+            )
+            assert manifest_seqs <= reference_seqs, (
+                f"{set_name} has {len(manifest_seqs - reference_seqs)} "
+                f"non-authentic sequence(s) outside the verified reference"
             )

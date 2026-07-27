@@ -251,6 +251,31 @@ def generate_synthetic_cohort(
 
     seed = spec.get("seed")
     members = generate_cohort_members(spec, seed)
+
+    # FR-3.13.2 (optional real Pulse Engine): when active, nudge each member's
+    # baseline physiology toward a live Pulse simulation. Seed-deterministic
+    # synthesis remains the default (C7).
+    try:
+        from engine.pulse_bridge import real_pulse_available, pulse_baseline
+
+        if real_pulse_available():
+            pb = pulse_baseline(spec.get("name", "digital_twin"))
+            if pb:
+                _pb_map = {
+                    "heart_rate": "heart_rate",
+                    "spo2": "spo2",
+                    "systolic": "blood_pressure_systolic",
+                    "diastolic": "blood_pressure_diastolic",
+                    "respiratory_rate": "respiratory_rate",
+                }
+                for m in members:
+                    b = m.get("baseline")
+                    if isinstance(b, dict):
+                        for dst, src in _pb_map.items():
+                            if dst in b and src in pb:
+                                b[dst] = pb[src]
+    except Exception:  # pragma: no cover - only active with real engine
+        pass
     timeseries_by_member = {
         m["synthetic_id"]: simulate_member_timeseries(
             m, duration_min=duration_min, cadence_sec=cadence_sec, seed=seed, index=i

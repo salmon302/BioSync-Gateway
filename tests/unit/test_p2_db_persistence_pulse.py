@@ -18,7 +18,7 @@ import hashlib
 import base64
 
 # Skip all tests if PyPulse is not available
-pytest.importorskip("PyPulse")
+pytest.importorskip("Pulse")
 
 
 class TestPulseDBPersistence:

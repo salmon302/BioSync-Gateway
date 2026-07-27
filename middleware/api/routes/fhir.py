@@ -20,6 +20,71 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 
 
+# ---------------------------------------------------------------------------
+# Resource persisters — single source of truth for stored FHIR resource types
+# ---------------------------------------------------------------------------
+# Both the standalone POST endpoints and the Bundle handler (G9 / FR-3.7.5)
+# persist through these helpers. This guarantees (a) identical column mapping
+# across code paths and (b) that EVERY supported resource type is durably
+# stored inside a transaction/batch Bundle -- not only Observation.
+#
+# Each persister constructs, adds, and flushes the ORM row (no commit) and
+# returns (orm_object, canonical_id) so the caller owns the transaction
+# boundary (a single commit wraps an entire Bundle).
+def _persist_observation(resource: Dict[str, Any], db: Session):
+    """Persist a FHIR Observation to the append-only observations table (FR-3.7.3)."""
+    code = resource.get("code", {}) or {}
+    coding = code.get("coding") or [{}]
+    obs_code = coding[0].get("code") or code.get("text") or "unknown"
+    vq = resource.get("valueQuantity", {}) or {}
+    db_obs = Observation(
+        observation_uid=str(uuid4()),
+        observation_code=obs_code,
+        value_quantity=vq,
+        unit=vq.get("unit") or vq.get("code"),
+        raw_data=resource.get("raw_data"),
+        filtered_data=resource.get("filtered_data"),
+        fhir_resource=resource,
+    )
+    db.add(db_obs)
+    db.flush()
+    return db_obs, db_obs.observation_uid
+
+
+def _persist_device_metric(resource: Dict[str, Any], db: Session):
+    """Persist a FHIR DeviceMetric to the device_metrics table (FR-3.7.2)."""
+    code = resource.get("code", {}) or {}
+    coding = code.get("coding") or [{}]
+    metric_name = coding[0].get("code") or code.get("text") or "unknown"
+    unit = (resource.get("unit", {}) or {}).get("code") or resource.get("unit")
+    db_dm = DeviceMetric(
+        device_id=resource.get("device"),
+        metric_name=metric_name,
+        category=resource.get("category"),
+        operational_status=resource.get("operationalStatus"),
+        unit=unit,
+        measurement_period=(
+            resource.get("measurementPeriod")
+            if isinstance(resource.get("measurementPeriod"), (int, float))
+            else None
+        ),
+        fhir_resource=resource,
+    )
+    db.add(db_dm)
+    db.flush()
+    return db_dm, str(db_dm.id)
+
+
+# Resource types the FHIR API can durably store. The Bundle handler persists
+# every entry whose resourceType is a key here. Registering a new supported,
+# persistable type is a one-line addition -- there is no brittle if/elif to
+# forget, which is exactly the regression G9 is meant to close.
+RESOURCE_PERSISTERS = {
+    "Observation": _persist_observation,
+    "DeviceMetric": _persist_device_metric,
+}
+
+
 @router.post("/Observation")
 async def create_observation(
     observation: Dict[str, Any],
@@ -48,23 +113,8 @@ async def create_observation(
 
     # Persist to the append-only observations table (SRS FR-3.7.3)
     try:
-        code = observation.get("code", {}) or {}
-        coding = code.get("coding") or [{}]
-        obs_code = coding[0].get("code") or code.get("text") or "unknown"
-        vq = observation.get("valueQuantity", {}) or {}
-        db_obs = Observation(
-            observation_uid=str(uuid4()),
-            observation_code=obs_code,
-            value_quantity=vq,
-            unit=vq.get("unit") or vq.get("code"),
-            raw_data=observation.get("raw_data"),
-            filtered_data=observation.get("filtered_data"),
-            fhir_resource=observation,
-        )
-        db.add(db_obs)
-        db.flush()
+        db_obs, _ = _persist_observation(observation, db)
         db.commit()
-        db.refresh(db_obs)
     except SQLAlchemyError as e:
         db.rollback()
         logger.error(f"Failed to persist Observation: {e}")
@@ -147,25 +197,8 @@ async def create_device_metric(
 
     # Persist to the device_metrics table (SRS FR-3.7.2)
     try:
-        code = device_metric.get("code", {}) or {}
-        coding = code.get("coding") or [{}]
-        metric_name = coding[0].get("code") or code.get("text") or "unknown"
-        unit = (device_metric.get("unit", {}) or {}).get("code") or device_metric.get("unit")
-        db_dm = DeviceMetric(
-            device_id=device_metric.get("device"),
-            metric_name=metric_name,
-            category=device_metric.get("category"),
-            operational_status=device_metric.get("operationalStatus"),
-            unit=unit,
-            measurement_period=(device_metric.get("measurementPeriod")
-                                if isinstance(device_metric.get("measurementPeriod"), (int, float))
-                                else None),
-            fhir_resource=device_metric,
-        )
-        db.add(db_dm)
-        db.flush()
+        db_dm, _ = _persist_device_metric(device_metric, db)
         db.commit()
-        db.refresh(db_dm)
     except SQLAlchemyError as e:
         db.rollback()
         logger.error(f"Failed to persist DeviceMetric: {e}")
@@ -286,24 +319,18 @@ async def process_bundle(
                 continue
 
             res_type = resource.get("resourceType")
+            persister = RESOURCE_PERSISTERS.get(res_type)
 
-            if res_type == "Observation" and method in ("POST", "PUT"):
-                code = resource.get("code", {}) or {}
-                coding = code.get("coding") or [{}]
-                obs_code = coding[0].get("code") or code.get("text") or "unknown"
-                vq = resource.get("valueQuantity", {})
-                db_obs = Observation(
-                    observation_uid=str(uuid4()),
-                    observation_code=obs_code,
-                    value_quantity=vq,
-                    unit=vq.get("unit") or vq.get("code"),
-                    raw_data=resource.get("raw_data"),
-                    filtered_data=resource.get("filtered_data"),
-                    fhir_resource=resource,
-                )
-                db.add(db_obs)
-                db.flush()
-                location = f"{url}/{db_obs.observation_uid}"
+            if persister and method in ("POST", "PUT"):
+                # G9 (FR-3.7.5): persist EVERY supported resource type inside
+                # the Bundle, not only Observation. Dispatch is driven by
+                # RESOURCE_PERSISTERS, so any registered type is stored
+                # durably -- there is no silent "acknowledge without storage"
+                # fall-through for supported types. A persistence failure
+                # (e.g. constraint violation) propagates to the outer handler,
+                # which rolls back the whole Bundle.
+                orm_obj, rid = persister(resource, db)
+                location = f"{url}/{rid}"
                 processed_entries.append({
                     "response": {
                         "status": "201 Created",
@@ -312,7 +339,8 @@ async def process_bundle(
                     }
                 })
             else:
-                # Non-persisted resource types acknowledged without storage
+                # Genuinely unsupported resource types (and non-write methods
+                # such as GET/DELETE) are acknowledged without storage.
                 status_code = "200 OK" if method == "PUT" else "201 Created"
                 processed_entries.append({
                     "response": {

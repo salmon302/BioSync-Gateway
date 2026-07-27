@@ -15,7 +15,7 @@ from typing import Callable
 
 from api.auth import get_current_user, User
 from api.middleware.response_time import ResponseTimeMiddleware, get_metrics
-from api.routes import health, audit, telemetry, plates, fhir, simulations, auth, admin, human_factors, pkpd, chemistry, digital_twin, mrd
+from api.routes import health, audit, telemetry, plates, fhir, simulations, auth, admin, human_factors, pkpd, chemistry, digital_twin, mrd, ai, scenarios
 from engine import init_engines
 
 # Configure logging
@@ -92,6 +92,21 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"Failed to initialize engines: {e}")
         raise
+
+    # Seed the RAG template registry (FR-3.15.3) - idempotent insert-only.
+    try:
+        from database import SessionLocal
+        from ai.rag import get_rag_repo, seed_rag_templates
+
+        _rdb = SessionLocal()
+        try:
+            n = seed_rag_templates(_rdb, get_rag_repo())
+            _rdb.commit()
+            logger.info("RAG template registry seeded (%d rows)", n)
+        finally:
+            _rdb.close()
+    except Exception as e:
+        logger.warning("RAG template registry seed skipped: %s", e)
     
     # Start telemetry broadcast task
     from api.routes.telemetry import manager as telemetry_manager
@@ -177,6 +192,8 @@ app.include_router(pkpd.router, prefix="/api/simulation", tags=["simulation-pkpd
 app.include_router(chemistry.router, prefix="/api/simulation", tags=["simulation-chemistry"])
 app.include_router(digital_twin.router, prefix="/api/simulation", tags=["simulation-digital-twin"])
 app.include_router(mrd.router, prefix="/api/simulation", tags=["simulation-mrd"])
+app.include_router(ai.router, prefix="/api/ai", tags=["ai"])
+app.include_router(scenarios.router, prefix="/api/scenarios", tags=["scenarios"])
 app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
 app.include_router(admin.router, prefix="/api/admin", tags=["admin"])
 app.include_router(human_factors.router, prefix="/api/human-factors", tags=["human-factors"])
@@ -201,6 +218,7 @@ async def protected_endpoint(current_user: User = Depends(get_current_user)):
         "message": "Access granted",
         "user": current_user.username,
         "role": current_user.role,
+        "scope": current_user.scopes,
         "scopes": current_user.scopes
     }
 

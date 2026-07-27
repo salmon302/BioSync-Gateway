@@ -15,7 +15,7 @@ import asyncio
 from concurrent.futures import ProcessPoolExecutor
 
 # Skip all tests if PyPulse is not available
-pytest.importorskip("PyPulse")
+pytest.importorskip("Pulse")
 
 
 # Module-level function for pickling (required by ProcessPoolExecutor)

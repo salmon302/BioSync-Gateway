@@ -35,23 +35,23 @@ class TestObservationCRUD:
         assert response.status_code == 403
 
     def test_create_valid_observation_accepted(self, authenticated_client, valid_observation):
-        """Valid Observation should be accepted."""
+        """Valid Observation should be accepted (201 Created, FHIR resource echoed)."""
         response = authenticated_client.post(
             "/api/fhir/Observation",
             json=valid_observation
         )
-        assert response.status_code == 200
+        assert response.status_code == 201
         data = response.json()
-        assert "status" in data
-        assert data["status"] == "created"
+        assert data["resourceType"] == "Observation"
+        assert "id" in data
 
     def test_create_minimal_observation_accepted(self, authenticated_client, minimal_observation):
-        """Minimal valid Observation should be accepted."""
+        """Minimal valid Observation should be accepted (201 Created)."""
         response = authenticated_client.post(
             "/api/fhir/Observation",
             json=minimal_observation
         )
-        assert response.status_code == 200
+        assert response.status_code == 201
 
     def test_create_observation_missing_value_rejected(self, authenticated_client, observation_missing_value):
         """Observation without valueQuantity should be rejected with 400."""
@@ -103,15 +103,15 @@ class TestDeviceMetricCRUD:
         assert response.status_code == 403
 
     def test_create_valid_device_metric_accepted(self, authenticated_client, valid_device_metric):
-        """Valid DeviceMetric should be accepted."""
+        """Valid DeviceMetric should be accepted (201 Created, FHIR resource echoed)."""
         response = authenticated_client.post(
             "/api/fhir/DeviceMetric",
             json=valid_device_metric
         )
-        assert response.status_code == 200
+        assert response.status_code == 201
         data = response.json()
-        assert "status" in data
-        assert data["status"] == "created"
+        assert data["resourceType"] == "DeviceMetric"
+        assert "id" in data
 
     def test_create_device_metric_missing_status_rejected(self, authenticated_client, device_metric_missing_status):
         """DeviceMetric without operationalStatus should be rejected."""
@@ -147,15 +147,18 @@ class TestBundleProcessing:
         assert response.status_code == 403
 
     def test_process_valid_transaction_bundle(self, authenticated_client, valid_fhir_bundle):
-        """Valid transaction Bundle should be accepted."""
+        """Valid transaction Bundle should be accepted (FHIR transaction-response)."""
         response = authenticated_client.post(
             "/api/fhir/Bundle",
             json=valid_fhir_bundle
         )
         assert response.status_code == 200
         data = response.json()
-        assert "status" in data
-        assert data["status"] == "processed"
+        assert data["resourceType"] == "Bundle"
+        assert data["type"] == "transaction-response"
+        assert len(data["entry"]) == len(valid_fhir_bundle["entry"])
+        for entry in data["entry"]:
+            assert entry["response"]["status"] == "201 Created"
 
     def test_process_bundle_with_invalid_entry(self, authenticated_client):
         """Bundle with invalid entry should be rejected."""

@@ -314,4 +314,14 @@ def generate_pkpd_worklist(
     )
     db.add(row)
     db.flush()
+
+    # FR-3.11.1 (optional real Pulse Engine): register the substance into an
+    # active Pulse simulation when the bridge is enabled. Synthesis is unchanged
+    # (C7).
+    try:
+        from engine.pulse_bridge import register_pulse_substance
+
+        register_pulse_substance(substance, "pk_pd_loop")
+    except Exception:  # pragma: no cover - only active with real engine
+        pass
     return row

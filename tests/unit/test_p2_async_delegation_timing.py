@@ -15,7 +15,7 @@ import time
 from concurrent.futures import ProcessPoolExecutor
 
 # Skip all tests if PyPulse is not available
-pytest.importorskip("PyPulse")
+pytest.importorskip("Pulse")
 
 
 class TestPulseAsyncDelegationTiming:

@@ -1,0 +1,39 @@
+name: Pulse Engine CI (Real PyPulse)
+
+# Builds the native PyPulse.so from Kitware Pulse source (Dockerfile.pulse) and
+# runs the real-engine qualification suite (IQ-4, OQ-16, PQ-2, PQ-6) against it.
+# Isolated from the main push CI so a missing/blocked upstream Pulse source
+# never breaks ordinary builds; run on demand or nightly.
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Nightly at 04:23 UTC (avoid top-of-hour contention).
+    - cron: "23 4 * * *"
+
+concurrency:
+  group: pulse-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  pulse-build-and-qualify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Pulse engine image (compiles PyPulse.so)
+        run: docker build -f middleware/Dockerfile.pulse -t biosync-pulse:ci middleware
+
+      - name: Run IQ-4 / OQ-16 / PQ-2 / PQ-6 against the real engine
+        run: |
+          docker run --rm \
+            -e PYTHONPATH=/repo/middleware:/repo \
+            -v "$PWD:/repo" \
+            -w /repo/middleware \
+            biosync-pulse:ci \
+            pytest \
+              /repo/tests/test_iq4_pulse_engine_init.py \
+              /repo/tests/test_oq16_state_serialization.py \
+              /repo/tests/test_pq2_concurrent_simulations.py \
+              /repo/tests/test_pq6_ventilator_stress.py \
+              -v

@@ -277,6 +277,19 @@ def generate_chemistry_profile(
         seed=seed,
         scenario_run_id=scenario_run_id,
     )
+    # FR-3.12.1 (optional real Pulse Engine): record the live Pulse baseline as
+    # the source physiology when the bridge is active. Deterministic synthesis
+    # is unchanged (C7).
+    try:
+        from engine.pulse_bridge import real_pulse_available, pulse_baseline
+
+        if real_pulse_available():
+            pb = pulse_baseline(patient_id or "chemistry")
+            if pb:
+                vectors["_pulse_source"] = pb
+    except Exception:  # pragma: no cover - only active with real engine
+        pass
+
     db.add(row)
     db.flush()
     return row

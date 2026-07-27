@@ -141,7 +141,7 @@ async def telemetry_stream(websocket: WebSocket, token: Optional[str] = None):
         return
     
     # Check scope
-    scopes = payload.get("scopes", [])
+    scopes = payload.get("scope") or payload.get("scopes") or []
     if "telemetry_read" not in scopes and "admin" not in scopes:
         await websocket.close(code=4403, reason="Insufficient scope")
         return

@@ -110,9 +110,10 @@ def sample_jwt_token() -> str:
     payload = {
         "sub": "test-user",
         "role": "admin",
-        "scopes": ["plate_read", "plate_write", "fhir_read", "fhir_write",
+        "scope": ["plate_read", "plate_write", "fhir_read", "fhir_write",
                    "audit_read", "telemetry_write", "simulation_write",
-                   "human_factors_read", "human_factors_write"],
+                   "human_factors_read", "human_factors_write",
+                   "ai_read", "ai_write"],
         "iat": int(time.time()),
         "exp": int(time.time()) + 3600  # 1 hour expiry
     }
@@ -126,9 +127,10 @@ def admin_jwt_token() -> str:
     payload = {
         "sub": "admin-user",
         "role": "admin",
-        "scopes": ["plate_read", "plate_write", "fhir_read", "fhir_write",
+        "scope": ["plate_read", "plate_write", "fhir_read", "fhir_write",
                    "audit_read", "telemetry_write", "simulation_write",
-                   "human_factors_read", "human_factors_write"],
+                   "human_factors_read", "human_factors_write",
+                   "ai_read", "ai_write"],
         "iat": int(time.time()),
         "exp": int(time.time()) + 3600
     }
@@ -142,7 +144,7 @@ def tech_jwt_token() -> str:
     payload = {
         "sub": "tech-user",
         "role": "technician",
-        "scopes": ["telemetry_write", "fhir_read"],
+        "scope": ["telemetry_write", "fhir_read"],
         "iat": int(time.time()),
         "exp": int(time.time()) + 3600
     }
@@ -156,7 +158,7 @@ def human_factors_jwt_token() -> str:
     payload = {
         "sub": "hf-user",
         "role": "qa_officer",
-        "scopes": ["human_factors_read", "human_factors_write"],
+        "scope": ["human_factors_read", "human_factors_write"],
         "iat": int(time.time()),
         "exp": int(time.time()) + 3600
     }
@@ -170,7 +172,7 @@ def hf_read_only_token() -> str:
     payload = {
         "sub": "hf-read-user",
         "role": "researcher",
-        "scopes": ["human_factors_read"],
+        "scope": ["human_factors_read"],
         "iat": int(time.time()),
         "exp": int(time.time()) + 3600
     }
@@ -184,7 +186,7 @@ def expired_jwt_token() -> str:
     payload = {
         "sub": "test-user",
         "role": "admin",
-        "scopes": ["plate_read"],
+        "scope": ["plate_read"],
         "iat": int(time.time()) - 7200,  # issued 2 hours ago
         "exp": int(time.time()) - 3600   # expired 1 hour ago
     }

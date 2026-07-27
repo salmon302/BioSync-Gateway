@@ -31,7 +31,9 @@ const Navigation: React.FC = () => {
     { path: '/telemetry', label: 'Telemetry Dashboard' },
     { path: '/plates', label: 'Microplate Editor' },
     { path: '/audit', label: 'Audit Viewer' },
-    { path: '/admin', label: 'Admin Console' }
+    { path: '/admin', label: 'Admin Console' },
+    { path: '/scenario', label: 'Scenario Designer' },
+    { path: '/analytics', label: 'Analytics Results' }
   ]
 
   return (

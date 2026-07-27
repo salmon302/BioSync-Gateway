@@ -58,6 +58,10 @@ services:
       - OPENFDA_API_KEY=${OPENFDA_API_KEY:-}
       - ACCESSGUDID_API_KEY=${ACCESSGUDID_API_KEY:-}
       - BIOSYNC_CACHE_DIR=/app/cache
+      # Use the real Kitware Pulse engine when the image was built with
+      # MIDDLEWARE_DOCKERFILE=Dockerfile.pulse (R1). Degrades gracefully to
+      # seed-synthesis if the engine import fails.
+      - BIOSSYNC_REAL_PULSE=1
     ports:
       - "8000:8000"
     volumes:

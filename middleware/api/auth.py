@@ -157,6 +157,8 @@ def _dev_authenticate(username: str, password: str) -> Optional[User]:
         "simulation_read", "simulation_write",
         "human_factors_read", "human_factors_write",
         "audit_read", "audit_write",
+        "ai_read", "ai_write",
+        "scenario_read", "scenario_write",
     ]
     if username == "admin":
         scopes.append("admin")
@@ -181,6 +183,7 @@ class TokenData(BaseModel):
     username: Optional[str] = None
     role: Optional[str] = None
     scopes: Optional[List[str]] = None
+    scope: Optional[List[str]] = None
 
 
 async def get_current_user(
@@ -209,7 +212,7 @@ async def get_current_user(
         
         username: str = payload.get("sub")
         role: str = payload.get("role")
-        scopes: List[str] = payload.get("scopes", [])
+        scopes: List[str] = payload.get("scope") or payload.get("scopes") or []
         
         if username is None:
             raise credentials_exception
@@ -217,7 +220,8 @@ async def get_current_user(
         token_data = TokenData(
             username=username,
             role=role,
-            scopes=scopes
+            scopes=scopes,
+            scope=scopes,
         )
         
     except JWTError as e:
@@ -257,6 +261,11 @@ def create_access_token(data: dict, expires_delta: Optional[int] = None) -> str:
         expire = issued_at + timedelta(hours=JWT_EXPIRATION_HOURS)
 
     to_encode.update({"iat": issued_at, "exp": expire})
+    # FR-3.8.5: canonical JWT claim is `scope` (singular). Retain
+    # `scopes` as a backward-compatible alias for existing clients.
+    _scope = data.get("scope") or data.get("scopes")
+    if _scope is not None:
+        to_encode["scope"] = _scope
 
     encoded_jwt = jwt.encode(to_encode, JWT_SECRET, algorithm=JWT_ALGORITHM)
     return encoded_jwt
@@ -282,7 +291,10 @@ def create_refresh_token(data: dict) -> str:
         "jti": str(uuid4()),
         "type": "refresh",
     })
-    
+    _scope = data.get("scope") or data.get("scopes")
+    if _scope is not None:
+        to_encode["scope"] = _scope
+
     encoded_jwt = jwt.encode(to_encode, JWT_SECRET, algorithm=JWT_ALGORITHM)
     return encoded_jwt
 
@@ -305,7 +317,7 @@ def verify_refresh_token(token: str) -> Optional[User]:
         
         username: str = payload.get("sub")
         role: str = payload.get("role")
-        scopes: List[str] = payload.get("scopes", [])
+        scopes: List[str] = payload.get("scope") or payload.get("scopes") or []
         
         if username is None:
             return None
