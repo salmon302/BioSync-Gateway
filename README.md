@@ -221,7 +221,6 @@ BioSync-Gateway/
 ```
 
 ---
-
 ## Current Status & Roadmap
 
 BioSync-Gateway is **actively developed against SRS v1.1**. The baseline (v1.0) compliance, security, and algorithmic engines are complete and tested; the advanced-analytics expansion is in progress:
