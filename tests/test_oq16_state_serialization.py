@@ -8,7 +8,7 @@ import pytest
 # Skip all tests in this module if PyPulse is not available.
 # PyPulse is compiled from source in the production Docker image (Dockerfile.pulse).
 # See DEVELOPMENT_PLAN §7.1 and SRS §3.6.
-pytest.importorskip("Pulse")
+pytest.importorskip("pulse")
 
 from middleware.engine.pulse import PulseWorker, PatientConfig, run_oq16_test
 

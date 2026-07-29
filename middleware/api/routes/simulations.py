@@ -74,7 +74,7 @@ async def advance_simulation(
     Implements SRS FR-3.6.2 + Constraint C1
     """
     try:
-        metrics = await simulation_manager.step_simulation(simulation_id, steps)
+        metrics = simulation_manager.step_simulation(simulation_id, steps)
         return {
             "simulation_id": simulation_id,
             "steps_completed": steps,

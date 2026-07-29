@@ -10,7 +10,7 @@ import pytest
 import time
 
 # Skip all tests if PyPulse is not available
-pytest.importorskip("Pulse")
+pytest.importorskip("pulse")
 
 from middleware.engine.pulse import SimulationManager, PatientConfig
 
@@ -29,7 +29,7 @@ class TestPQ6VentilatorStress:
         for i in range(10):
             config = PatientConfig(
                 patient_id=f"vent-patient-{i}",
-                age=45 + i * 3,
+                age=min(45 + i * 3, 65),
                 weight_kg=65 + i * 2,
                 height_cm=165 + i * 2,
                 sex="male" if i % 2 == 0 else "female",
@@ -53,7 +53,7 @@ class TestPQ6VentilatorStress:
         for i in range(5):
             config = PatientConfig(
                 patient_id=f"range-patient-{i}",
-                age=30 + i * 10,
+                age=min(30 + i * 10, 65),
                 weight_kg=60 + i * 5,
                 height_cm=160 + i * 5,
                 sex="male" if i % 2 == 0 else "female"

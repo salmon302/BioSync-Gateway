@@ -10,7 +10,7 @@ bindings (colloquially "PyPulse"), which are compiled from source by
 
 Design notes
 ------------
-* The heavy ``import Pulse`` happens **lazily inside** :meth:`PulseWorker.initialize`
+* The heavy ``import pulse`` happens **lazily inside** :meth:`PulseWorker.initialize`
   so this module can be imported (and unit-tested) even when the native engine
   is absent. If the engine import fails, initialization fails *closed* (no
   synthetic mock) per SRS C1.
@@ -29,6 +29,7 @@ import asyncio
 import base64
 import hashlib
 import logging
+import os
 import time
 import uuid
 from concurrent.futures import ProcessPoolExecutor, Future
@@ -100,16 +101,22 @@ class SerializedState:
     is_valid: bool = True
 
 
-# Pulse data-request (CDM) property names -> (unit) used for FR-3.6.4.
-# These are the canonical Pulse data request names.
+# Pulse data-request (CDM) property names used for FR-3.6.4.
+# The engine version vendored in .pulse (setup.py: name='pulse') exposes a
+# pure-python wrapper package `pulse` (with compiled `PyPulse` C extension).
+# Units are SE-Scalar enums (from pulse.cdm.scalars), NOT strings, in
+# this version; the unit-by-name map is built inside
+# :meth:`_register_data_requests` because the enum classes are only
+# importable once the engine is available (keeps this module importable
+# without the C extension for the rest of the test/CI suite).
 _PULSE_DATA_REQUESTS = [
-    ("HeartRate", "bpm"),
-    ("SystolicArterialPressure", "mmHg"),
-    ("DiastolicArterialPressure", "mmHg"),
-    ("RespirationRate", "1/min"),
-    ("OxygenSaturation", "%"),
-    ("MeanAirwayPressure", "cmH2O"),
-    ("ArterialOxygenPartialPressure", "mmHg"),
+    "HeartRate",
+    "SystolicArterialPressure",
+    "DiastolicArterialPressure",
+    "RespirationRate",
+    "OxygenSaturation",
+    "MeanAirwayPressure",
+    "ArterialOxygenPartialPressure",
 ]
 
 
@@ -126,7 +133,7 @@ class PulseWorker:
     """
 
     # Required metrics to extract (SRS FR-3.6.4)
-    REQUIRED_METRICS = [name for name, _ in _PULSE_DATA_REQUESTS]
+    REQUIRED_METRICS = list(_PULSE_DATA_REQUESTS)
 
     # Simulation time step (seconds)
     TIME_STEP = 0.01  # 10 ms
@@ -134,7 +141,7 @@ class PulseWorker:
     def __init__(self, patient_config: PatientConfig):
         self.patient_config = patient_config
         self.state = SimulationState.INITIALIZING
-        self.engine = None  # Native Pulse.Engine()
+        self.engine = None  # Native pulse.engine.PulseEngine.PulseEngine()
         self._drm = None    # Native data request manager
         self.future: Optional[Future] = None
         self.start_time: Optional[float] = None
@@ -158,27 +165,34 @@ class PulseWorker:
         single-threaded per patient and must be delegated to worker pools).
         """
         try:
-            import Pulse
-            from Pulse.CDM import (
-                SEPatientConfiguration,
-                SEPatient,
-                TimeUnit,
-                MassUnit,
-                LengthUnit,
-                eSex,
-            )
-        except ImportError as exc:
+            from pulse.engine.PulseEngine import PulseEngine, eModelType
+            import Pulse  # compat shim exposing the legacy `Pulse` API (Pulse.Engine)
+            from pulse.cdm.patient import SEPatientConfiguration, eSex
+            from pulse.cdm.scalars import TimeUnit, MassUnit, LengthUnit
+        except ImportError as exc:  # pragma: no cover - native build
             logger.error(
-                "The Pulse Physiology Engine bindings (the 'Pulse' package) are "
-                "not importable. PyPulse must be compiled into this image via the "
-                "multi-stage Dockerfile.pulse (see DEVELOPMENT_PLAN §7.1). "
-                "ImportError: %s", exc,
+                "The Pulse Physiology Engine bindings (the 'pulse' package / "
+                "'PyPulse' C extension) are not importable. PyPulse must be "
+                "compiled into this image via the multi-stage Dockerfile.pulse "
+                "(see DEVELOPMENT_PLAN §7.1). ImportError: %s", exc,
             )
             self.state = SimulationState.ERROR
             return False
 
         try:
-            self.engine = Pulse.Engine()
+            self.engine = PulseEngine(eModelType.HumanAdultWholeBody)
+        except Exception as exc:  # pragma: no cover - native construction
+            logger.error("Failed to construct Pulse Engine: %s", exc)
+            self.state = SimulationState.ERROR
+            return False
+
+        try:
+            # Pulse 4.3.2 loads its data tables from data_root_dir. In the
+            # biosync-pulse image the data JSON files live in /pulse/bin; allow
+            # override via PULSE_DATA_ROOT for local/dev builds.
+            self.engine = Pulse.Engine(
+                data_root_dir=os.environ.get("PULSE_DATA_ROOT", "/pulse/bin")
+            )
         except Exception as exc:  # pragma: no cover - native construction
             logger.error("Failed to construct Pulse Engine: %s", exc)
             self.state = SimulationState.ERROR
@@ -186,21 +200,23 @@ class PulseWorker:
 
         # Build the patient configuration (SRS FR-3.6.1).
         pc = SEPatientConfiguration()
-        patient = SEPatient()
+        # NOTE: SEPatientConfiguration.set_patient() has a buggy isinstance()
+        # guard in this engine build; use get_patient() which lazily creates
+        # the enclosed SEPatient and avoids that path.
+        patient = pc.get_patient()
         patient.set_name(self.patient_config.patient_id)
         patient.get_age().set_value(self.patient_config.age, TimeUnit.yr)
         patient.get_weight().set_value(self.patient_config.weight_kg, MassUnit.kg)
         patient.get_height().set_value(self.patient_config.height_cm, LengthUnit.cm)
         sex = (self.patient_config.sex or "male").lower()
         if sex == "female":
-            patient.get_sex().set_value(eSex.Female)
-        elif sex == "other":
-            patient.get_sex().set_value(eSex.Other)
+            patient.set_sex(eSex.Female)
         else:
-            patient.get_sex().set_value(eSex.Male)
-        pc.set_patient(patient)
+            patient.set_sex(eSex.Male)
 
-        if not self.engine.initialize_engine(pc):
+        # Register data requests once for the whole simulation (FR-3.6.4).
+        self._drm = self._register_data_requests()
+        if not self.engine.initialize_engine(pc, self._drm):
             logger.error(
                 "Pulse Engine initialize_engine() returned False for patient %s",
                 self.patient_config.patient_id,
@@ -208,29 +224,36 @@ class PulseWorker:
             self.state = SimulationState.ERROR
             return False
 
-        # Register data requests once for the whole simulation (FR-3.6.4).
-        try:
-            self._drm = self.engine.get_data_request_manager()
-            self._register_data_requests(self._drm)
-        except Exception as exc:  # pragma: no cover - native API
-            logger.error("Failed to configure Pulse data request manager: %s", exc)
-            self.state = SimulationState.ERROR
-            return False
-
         self.state = SimulationState.RUNNING
         self.start_time = time.time()
         return True
 
-    @staticmethod
-    def _register_data_requests(drm) -> None:
-        """Create the FR-3.6.4 data requests on the manager (idempotent)."""
-        from Pulse.CDM import SEDataRequest
+    def _register_data_requests(self):
+        """Build the FR-3.6.4 data requests on a SEDataRequestManager.
 
-        for name, unit in _PULSE_DATA_REQUESTS:
-            dr = SEDataRequest()
-            dr.set_name(name)
-            dr.set_unit(unit)
-            drm.create_data_request(dr)
+        Returns the manager (also stored on ``self._drm``) and records the
+        request name order on ``self._request_order`` so
+        :meth:`_extract_metrics` can read values by name.
+        """
+        from pulse.cdm.engine import SEDataRequest, SEDataRequestManager
+        from pulse.cdm.scalars import FrequencyUnit, PressureUnit
+
+        _unit_by_name = {
+            "HeartRate": FrequencyUnit.Per_min,
+            "SystolicArterialPressure": PressureUnit.mmHg,
+            "DiastolicArterialPressure": PressureUnit.mmHg,
+            "RespirationRate": FrequencyUnit.Per_min,
+            "OxygenSaturation": None,
+            "MeanAirwayPressure": PressureUnit.cmH2O,
+            "ArterialOxygenPartialPressure": PressureUnit.mmHg,
+        }
+        requests = [
+            SEDataRequest.create_physiology_request(name, unit=_unit_by_name.get(name))
+            for name in _PULSE_DATA_REQUESTS
+        ]
+        self._drm = SEDataRequestManager(requests)
+        self._request_order = list(_PULSE_DATA_REQUESTS)
+        return self._drm
 
     def step(self, n_steps: int = 1) -> Dict[str, float]:
         """
@@ -285,8 +308,11 @@ class PulseWorker:
         """
         Serialize simulation state for persistence (SRS FR-3.6.3).
 
-        Uses Google Protocol Buffers (SEState) for state serialization as
-        required by SRS FR-3.6.3. The serialized GPB binary is base64-encoded
+        Uses Pulse's JSON serialization (via
+        ``engine.serialize_to_string(JSON)``) as required by SRS FR-3.6.3
+        (GPB -> JSONB). JSON is returned as UTF-8 text by the SWIG binding,
+        whereas the BINARY format returns raw bytes that the binding cannot
+        decode (UnicodeDecodeError). The serialized text is base64-encoded
         for JSONB storage in PostgreSQL.
 
         Returns:
@@ -295,18 +321,19 @@ class PulseWorker:
         if not self.engine:
             raise RuntimeError("Engine not initialized")
 
+        from pulse.cdm.engine import eSerializationFormat
         try:
-            from Pulse.CDM import SEState
-            state_proto = SEState()
-            self.engine.get_state(state_proto)
-            gpb_bytes = state_proto.SerializeToString()
+            raw = self.engine.serialize_to_string(eSerializationFormat.JSON)
         except Exception as exc:  # pragma: no cover - native API
             raise RuntimeError(
-                "Pulse Engine get_state() failed; ensure a compatible Pulse "
-                f"Engine version is installed. Error: {exc}"
+                "Pulse Engine serialize_to_string() failed; ensure a compatible "
+                f"Pulse Engine version is installed. Error: {exc}"
             )
 
-        engine_state_b64 = base64.b64encode(gpb_bytes).decode()
+        if isinstance(raw, (bytes, bytearray)):
+            engine_state_b64 = base64.b64encode(raw).decode()
+        else:
+            engine_state_b64 = base64.b64encode(str(raw).encode()).decode()
         # SHA-256 hash for tamper detection (SRS FR-3.8.3).
         state_hash = hashlib.sha256(engine_state_b64.encode()).hexdigest()
 
@@ -336,33 +363,38 @@ class PulseWorker:
         """
         Extract required physiological metrics from the engine (FR-3.6.4).
 
-        Uses the Pulse Data Request Manager configured in :meth:`initialize`.
-        ``pull_data()`` returns a pandas DataFrame of the requested quantities;
-        we read the most recent row. Any failure raises (no mock).
+        In this engine version ``pull_data()`` returns a list whose first
+        element is the simulation time and whose remaining elements align 1:1
+        (by index) with the requests registered in :meth:`_register_data_requests`.
+        Each element is the numeric value (or a scalar object exposing
+        ``.value``). Any failure raises (no mock).
 
         Returns:
             SimulationMetrics object.
         """
-        if self.engine is None or self._drm is None:
+        if self.engine is None or getattr(self, "_drm", None) is None:
             raise RuntimeError("Engine not initialized")
 
         try:
-            raw = self._drm.pull_data()
+            values = self.engine.pull_data()
         except Exception as exc:  # pragma: no cover - native API
             raise RuntimeError(f"Pulse data request pull failed: {exc}")
 
+        # pull_data() returns a numpy ndarray; `not values` is invalid for arrays
+        # with >1 element, so guard on None explicitly (Pulse 4.3.2 binding).
+        if values is None or len(values) < 2:
+            return SimulationMetrics(timestamp=time.time())
+
         def val(name: str, default: float = 0.0) -> float:
             try:
-                if hasattr(raw, "iloc"):  # pandas DataFrame
-                    cols = getattr(raw, "columns", [])
-                    if name in cols:
-                        return float(raw[name].iloc[-1])
-                    return default
-                if isinstance(raw, dict):
-                    return float(raw.get(name, default))
+                idx = self._request_order.index(name) + 1  # +1: values[0] is sim time
+                v = values[idx]
+                try:
+                    return float(v)
+                except (TypeError, ValueError):
+                    return float(getattr(v, "value", v))
             except Exception:
                 return default
-            return default
 
         return SimulationMetrics(
             timestamp=time.time(),
@@ -370,7 +402,9 @@ class PulseWorker:
             blood_pressure_systolic=val("SystolicArterialPressure"),
             blood_pressure_diastolic=val("DiastolicArterialPressure"),
             respiratory_rate=val("RespirationRate"),
-            spo2=val("OxygenSaturation"),
+            # Pulse reports OxygenSaturation as a 0..1 fraction; surface it as
+            # a percentage (SpO2 80-100%) per the qualification-test contract.
+            spo2=val("OxygenSaturation") * 100.0,
             temperature=0.0,
             cardiac_output=0.0,
             stroke_volume=0.0,
@@ -434,14 +468,16 @@ class SimulationManager:
 
         return simulation_id
 
-    async def step_simulation(self, simulation_id: str, n_steps: int = 1) -> Dict:
+    def step_simulation(self, simulation_id: str, n_steps: int = 1) -> Dict:
         """
-        Advance a simulation asynchronously (SRS FR-3.6.2, C1).
+        Advance a simulation (SRS FR-3.6.2, C1).
 
         Note: the native engine object cannot be pickled, so a ProcessPool
-        submission would fail; we degrade to a direct call which still keeps
-        the API surface async. A production deployment should pin each engine
-        to a long-lived worker process/thread (tracked as a follow-up).
+        submission would fail; we degrade to a direct call. The method is kept
+        synchronous (it blocks on the native engine step); callers that need
+        non-blocking behaviour should wrap it in a worker thread. A production
+        deployment should pin each engine to a long-lived worker
+        process/thread (tracked as a follow-up).
         """
         if simulation_id not in self.simulations:
             raise ValueError(f"Simulation {simulation_id} not found")

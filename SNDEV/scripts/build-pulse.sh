@@ -22,14 +22,44 @@
 #                  git            = clone the pinned upstream tag (CI)
 set -euo pipefail
 
+# Resolve script directory and log paths relative to SNDEV/scripts
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LOG_DIR="${SCRIPT_DIR}/logs"
+mkdir -p "${LOG_DIR}"
+
+TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
+LOG_FILE="${LOG_DIR}/build-pulse_${TIMESTAMP}.log"
+
+# Define failure trap handler
+on_failure() {
+    local exit_code=$?
+    local line_no=$1
+    echo ""
+    echo "========================================================================"
+    echo ">> [ERROR] Script execution failed at line ${line_no} with code ${exit_code}."
+    echo ">> [LOGS]  Failure log saved to: ${LOG_FILE}"
+    echo "========================================================================"
+    echo ""
+    read -rp "Press [ENTER] to exit..."
+    exit "${exit_code}"
+}
+
+trap 'on_failure $LINENO' ERR
+
+# Tee all script output (stdout + stderr) to both the terminal and log file
+exec > >(tee -a "${LOG_FILE}") 2>&1
+
 IMAGE_TAG="${1:-biosync-pulse:local}"
 PULSE_VARIANT="${PULSE_VARIANT:-local}"
 # Resolve the repository root relative to this script (SNDEV/scripts -> root).
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
+echo ">> Log session started at $(date)"
 echo ">> [R1] Building Pulse image (source variant: ${PULSE_VARIANT})"
 echo "   context = ${REPO_ROOT}"
 echo "   tag     = ${IMAGE_TAG}"
+echo "   log     = ${LOG_FILE}"
+
 docker build -f middleware/Dockerfile.pulse --build-arg "VARIANT=${PULSE_VARIANT}" -t "${IMAGE_TAG}" "${REPO_ROOT}"
 
 echo ">> [IQ-4 build gate] asserting 'import Pulse' in the runtime image"

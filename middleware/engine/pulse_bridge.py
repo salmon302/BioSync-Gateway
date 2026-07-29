@@ -42,7 +42,7 @@ def real_pulse_available() -> bool:
         )
         return False
     try:
-        import Pulse  # noqa: F401 - native engine
+        import pulse  # noqa: F401 - native engine
         return True
     except Exception as exc:  # pragma: no cover - depends on native build
         logger.warning(
