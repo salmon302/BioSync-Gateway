@@ -221,7 +221,6 @@ BioSync-Gateway/
 ```
 
 ---
-
 ## Current Status & Roadmap
 
 BioSync-Gateway is **broadly code-complete and demo-complete against SRS v1.1**. The baseline (v1.0) compliance, security, and algorithmic engines are complete and tested; the advanced-analytics expansion (FR-3.11–FR-3.16, including the LLM/RAG gateway and the Scenario Designer UI) is implemented. Remaining work is frontend-weighted and tracked below and in `SNDEV/docs/impl-2026-07-29-srs-status-and-remaining-work.md`.
