@@ -130,7 +130,7 @@ Kitware Pulse's C++ core is single-threaded per patient. Delegating time-steps t
 Hamming distance, the dilution solver, and the EMA filter are implemented in auditable, dependency-light Python so they can be line-reviewed for Computer System Validation. *Cost:* we forgo optimized numerics libraries that would complicate the validation evidence pack.
 
 **6. Synthetic-only, seed-deterministic data (C2, C7).**
-No PHI ever enters the system; cohorts and simulations are flagged `synthetic=true` and reproducible from stored seeds. This lets biopharma/CRO partners validate LIMS/EHR ingestion against realistic data without privacy exposure. *Cost:* the advanced modules currently *synthesize* physiology deterministically rather than always driving the live Pulse binary (real-engine integration is gated on building `PyPulse.so`, see Status).
+No PHI ever enters the system; cohorts and simulations are flagged `synthetic=true` and reproducible from stored seeds. This lets biopharma/CRO partners validate LIMS/EHR ingestion against realistic data without privacy exposure. *Cost:* the advanced modules still *synthesize* much of their physiology deterministically for reproducibility, but the live Pulse binary is now built, runs in-process, and is fully qualified (see "Pulse Engine Reliability Fixes" below).
 
 **7. Swappable LLM provider + local static RAG (C8, C9).**
 The AI gateway speaks the OpenAI-compatible SDK so OpenRouter and local Ollama/vLLM are interchangeable by config, and RAG context comes from a local directory of CAP/CLIA templates — no external vector DB, no data leaving the boundary. *Cost:* we trade the richer retrieval of a managed embedding service for air-gapped reproducibility and zero external dependencies.
@@ -229,12 +229,28 @@ BioSync-Gateway is **actively developed against SRS v1.1**. The baseline (v1.0) 
 | Capability | State |
 |------------|-------|
 | Telemetry visualization, microplates, barcode safety, dilution solver, EMA, FHIR, audit/hash-chain, JWT auth, human-factors | ✅ Implemented & tested |
-| Pulse Engine integration (FR-3.6) | ✅ Wired; real `PyPulse` build pending CI (gated) |
+| Pulse Engine integration (FR-3.6) | ✅ Real `PyPulse` built, runs, and qualified (19/19 IQ/OQ/PQ) |
 | Advanced modules — PK/PD, Clinical Chemistry, Digital Twin, MRD (FR-3.11–3.14) | ✅ Backend implemented, routed, unit-tested |
 | **LLM/RAG Clinical Text Gateway (FR-3.15)** | 🟡 Schema only — implementation next |
 | **Scenario Orchestrator + Scenario Designer UI (FR-3.16)** | 🟡 Schema only — orchestrator & UI next |
 
-**Next priorities:** (1) FR-3.15 LLM/RAG gateway with swappable provider + local RAG; (2) FR-3.16 scenario orchestrator and frontend designer; (3) real Pulse integration so advanced modules drive the live engine; (4) close v1.0 carry-over gaps (authentic Illumina barcodes, live-path perf hardening, alarm 100 ms SLA test). See `SNDEV/docs/` for the detailed gap analysis and audit logs.
+**Next priorities:** (1) FR-3.15 LLM/RAG gateway with swappable provider + local RAG; (2) FR-3.16 scenario orchestrator and frontend designer; (3) drive advanced modules from the live Pulse engine end-to-end; (4) close v1.0 carry-over gaps (authentic Illumina barcodes, live-path perf hardening, alarm 100 ms SLA test). See `SNDEV/docs/` for the detailed gap analysis and audit logs.
+
+### Pulse Engine Reliability Fixes (v1.1 R1)
+
+The real Kitware Pulse Engine now runs in-process and is fully qualified. Two classes of defects were resolved:
+
+- **SIGSEGV root cause (R-FIX-E).** `pulse::Controller::Initialize` reloads the substance set from the **process CWD**, not from the `data_root_dir` supplied at `PulseEngine(...)` construction. When the container `WORKDIR` (`/app`) differed from the generated data root (`/pulse/bin`), the reload found nothing → `GetSubstance("Oxygen")` returned null → `AddActiveSubstance(*m_O2)` dereferenced a null pointer (SIGSEGV, exit 139). Because `PyPulse` exposes no data-root setter, the compat shim (`middleware/Pulse/__init__.py`) now temporarily `os.chdir(data_root_dir)` around `Engine.initialize_engine` and restores the prior CWD in a `finally` block. No C++ change and no public-API change.
+
+- **Secondary production defects (exposed once the crash was gone).** With the engine actually executing, five further pre-existing bugs were fixed so IQ-4 / OQ-16 / PQ-2 / PQ-6 could pass:
+  1. **Missing `import Pulse`** in `PulseWorker.initialize()` (raised `NameError`).
+  2. **ndarray truth-value error** — `if not values` on a NumPy array in `_extract_metrics` raised `ValueError`; guarded with `if values is None`.
+  3. **BINARY serialization** could not be decoded by the SWIG wrapper → `UnicodeDecodeError`; now serializes as **JSON**, and the shim translates the CDM `eSerializationFormat` enum to the `PyPulse.serialization_format` the binding expects.
+  4. **SpO₂ units** — the engine reports a 0–1 fraction while qualification expects 80–100%; SpO₂ is now emitted as a percentage (×100).
+  5. **`step_simulation` async/await mismatch** — it is a synchronous direct call but was declared `async def`; made a plain `def` and removed the invalid `await` in `api/routes/simulations.py`.
+  6. **PQ-6 fixture ages** exceeded the engine's hard 65-year limit (geriatrics unsupported); fixture ages are now capped at 65.
+
+**Validation:** full qualification against the rebuilt `biosync-pulse:local` image — **19/19 passed** (IQ-4 4/4, OQ-16 5/5, PQ-2 5/5, PQ-6 5/5). See `SNDEV/docs/impl-2026-07-28-pulse-segfault-fix.md` and `SNDEV/docs/impl-2026-07-28-pulse-segfault-diag-plan.md`.
 
 ---
 
