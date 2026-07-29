@@ -133,6 +133,22 @@ class TestPQ3HashChain1M:
         finally:
             conn.close()
 
+        # Prove this is a REAL 1M-row run, not an extrapolation: the table must
+        # actually hold 1,000,000 rows before verification (NFR-P4).
+        conn = self._connect()
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT count(*) FROM audit_log;")
+                    n = cur.fetchone()[0]
+            assert n == ROWS, (
+                f"audit_log holds {n:,} rows, expected {ROWS:,} (PQ-3 must run "
+                "against a real 1M-row table, NFR-P4)."
+            )
+            print(f"PQ-3: audit_log holds {n:,} rows (real 1M-row load confirmed)")
+        finally:
+            conn.close()
+
         # 3) Run the canonical nightly hash-chain verification SQL and
         #    assert it completes within NFR-P4 (<= 60 s for 1M rows).
         assert os.path.isfile(HASH_CHECK_SQL), f"Missing {HASH_CHECK_SQL}"

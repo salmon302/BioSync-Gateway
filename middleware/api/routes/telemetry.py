@@ -11,6 +11,7 @@ from typing import List, Dict, Optional
 import logging
 import json
 import time
+import asyncio
 from datetime import datetime
 from uuid import uuid4
 
@@ -189,6 +190,7 @@ async def ingest_telemetry(
     alarms = []
     persisted = 0
     ingest_start = time.perf_counter()
+    loop = asyncio.get_running_loop()
 
     try:
         for obs in observations:
@@ -231,10 +233,11 @@ async def ingest_telemetry(
 
             filtered_observations.append(filtered_obs)
 
-        # Durable commit to the append-only observations table
-        db.commit()
+        # Persist off the event loop so the synchronous psycopg2 I/O does not
+        # block the asyncio loop / WebSocket relay (R3 - NFR-P3 latency budget).
+        await loop.run_in_executor(None, db.commit)
     except SQLAlchemyError as e:
-        db.rollback()
+        await loop.run_in_executor(None, db.rollback)
         logger.error(f"Failed to persist telemetry observations: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -251,7 +254,7 @@ async def ingest_telemetry(
         rate = persisted / max(ingest_elapsed, 0.001)
         record_ingestion_rate(rate)
 
-    # Broadcast to WebSocket clients
+    # Broadcast to WebSocket clients (already async, non-blocking).
     message = {
         "type": "telemetry",
         "payload": telemetry_data,

@@ -1,0 +1,10 @@
+# Test / performance-qualification dependencies (NOT installed in the runtime image).
+#
+# Kept separate from requirements.txt so the production middleware image does
+# not ship the Locust load runner. Installed by .github/workflows/pq.yml for
+# PQ-1 (real Locust run) and PQ-4 (soak) qualification jobs.
+locust==2.46.2
+pytest==7.4.4
+pytest-asyncio==0.23.5
+pytest-cov==4.1.0
+httpx==0.26.0

@@ -27,7 +27,7 @@ BioSync-Gateway is a three-tier medical telemetry and laboratory informatics mid
 | Layer | Technology | Version Constraint |
 |:------|:-----------|:-------------------|
 | **Frontend** | React 18, TypeScript 5 | Node.js 20 LTS |
-| **Charting** | Apache ECharts 5 (open-source) | ECharts-only; SciChart.js removed per approved deviation from FR-3.1.3 (see REMAINING_WORK.md §0) |
+| **Charting** | Apache ECharts 5 (open-source) | ECharts-only; SciChart.js removed per approved deviation from FR-3.1.3 (see SNDEV/docs/deviation-2026-07-29-fr-3-1-3-scichart.md) |
 | **Middleware** | FastAPI, Python | Python 3.11+ |
 | **Async** | asyncio, `ProcessPoolExecutor` | — |
 | **FHIR** | `fhir.resources` 7.x (Pydantic v2) | — |
@@ -89,7 +89,7 @@ BioSync-Gateway is a three-tier medical telemetry and laboratory informatics mid
 | **Trigger-level audit, not app-level** | Prevents admin script / raw SQL bypass (SRS C3) |
 | **Worker pools for Pulse, not async-inline** | Pulse C++ core is single-threaded per patient (SRS C1) |
 | **Both raw and filtered telemetry stored** | Raw = compliance source of truth; filtered = alarm evaluation (FR-3.5.3) |
-| **Chart provider abstraction** | ECharts-only rendering backend; abstraction interface retained for future swappability (deviation from FR-3.1.3, see REMAINING_WORK.md §0) |
+| **Chart provider abstraction** | ECharts-only rendering backend; abstraction interface retained for future swappability (deviation from FR-3.1.3, see SNDEV/docs/deviation-2026-07-29-fr-3-1-3-scichart.md) |
 | **DB-generated timestamps only** | Prevents client clock spoofing for audit integrity (SRS D2) |
 
 ---

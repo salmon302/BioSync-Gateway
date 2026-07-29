@@ -14,6 +14,33 @@ providers requires NO code changes (C8). The ``openai`` SDK is only imported
 lazily when a real provider is selected, so this module is import-safe even
 when the dependency is not installed (enables offline unit qualification).
 
+Provider setup & key injection (NFR-S7 — secrets via env / Docker secrets)
+--------------------------------------------------------------------------
+OpenRouter (remote, requires a key)
+    LLM_PROVIDER=openrouter
+    OPENROUTER_API_KEY=sk-or-...            # direct env injection (local dev)
+    # OR mount a Docker secret and point at the file (production, preferred):
+    OPENROUTER_API_KEY_FILE=/run/secrets/openrouter_key
+    OPENROUTER_MODEL=openai/gpt-4o-mini    # any OpenAI-compatible model id
+    The key is resolved at call time: env value wins, then the secret file.
+    Missing key -> RuntimeError (fail closed, C8).
+
+Ollama (local, no key required)
+    LLM_PROVIDER=ollama
+    OLLAMA_BASE_URL=http://localhost:11434  # OpenAI-compatible /v1 shim
+    OLLAMA_MODEL=llama3                     # any pulled Ollama model
+    Ollama's shim accepts any non-empty key, so no secret is needed.
+
+vLLM (local/remote, no key required)
+    LLM_PROVIDER=vllm
+    LLM_VLLM_BASE_URL=http://localhost:8000/v1
+    LLM_VLLM_MODEL=meta-llama/Llama-3-8b-instruct
+    Point at any OpenAI-compatible vLLM server you operate.
+
+Regardless of provider, all inference is offloaded off the event loop via
+:func:`generate_text_async` (FR-3.15.2 / C6) and persisted with full
+provenance by :func:`persist_run` (FR-3.15.6).
+
 Implements:
   SRS FR-3.15.1 - Provider abstraction (C8)
   SRS FR-3.15.2 - async isolation is provided by :func:`generate_text_async`
@@ -46,6 +73,38 @@ VLLM_BASE_URL: Optional[str] = os.getenv("LLM_VLLM_BASE_URL") or None
 VLLM_MODEL: str = os.getenv("LLM_VLLM_MODEL", "meta-llama/Llama-3-8b-instruct")
 
 
+def _resolve_openrouter_key() -> Optional[str]:
+    """
+    Resolve the OpenRouter API key from the environment or a Docker secret
+    file (NFR-S7: secrets injected, never hard-coded).
+
+    Precedence:
+      1. The module-level ``OPENROUTER_API_KEY`` constant (captured at import
+         and still settable by tests via monkeypatch — preserves prior API).
+      2. The live ``OPENROUTER_API_KEY`` env var (call-time, so runtime
+         provider switching works without a module reload).
+      3. The file referenced by ``OPENROUTER_API_KEY_FILE`` (Docker secret
+         mount — the production-preferred injection path).
+
+    Returns ``None`` when none is set, which makes :func:`_resolve_client`
+    fail closed for the ``openrouter`` provider (C8).
+    """
+    key = OPENROUTER_API_KEY
+    if key:
+        return key
+    key = os.getenv("OPENROUTER_API_KEY")
+    if key:
+        return key
+    key_file = os.getenv("OPENROUTER_API_KEY_FILE")
+    if key_file:
+        try:
+            with open(key_file, "r", encoding="utf-8") as f:
+                return f.read().strip()
+        except OSError as exc:
+            logger.error("OPENROUTER_API_KEY_FILE set but unreadable: %s", exc)
+    return None
+
+
 def get_provider_config() -> Dict[str, Any]:
     """Return the resolved provider configuration (non-secret)."""
     return {
@@ -54,7 +113,7 @@ def get_provider_config() -> Dict[str, Any]:
         "openrouter_base_url": "https://openrouter.ai/api/v1" if PROVIDER == "openrouter" else None,
         "ollama_base_url": (OLLAMA_BASE_URL.rstrip("/") + "/v1") if PROVIDER == "ollama" else None,
         "vllm_base_url": VLLM_BASE_URL,
-        "has_openrouter_key": bool(OPENROUTER_API_KEY),
+        "has_openrouter_key": bool(_resolve_openrouter_key()),
     }
 
 
@@ -83,11 +142,13 @@ def _build_openai_client(base_url: str, api_key: str):
 def _resolve_client():
     """Return an OpenAI-compatible client for the configured provider."""
     if PROVIDER == "openrouter":
-        if not OPENROUTER_API_KEY:
+        key = _resolve_openrouter_key()
+        if not key:
             raise RuntimeError(
-                "LLM_PROVIDER=openrouter requires OPENROUTER_API_KEY (FR-3.15.1)."
+                "LLM_PROVIDER=openrouter requires OPENROUTER_API_KEY (or "
+                "OPENROUTER_API_KEY_FILE) (FR-3.15.1)."
             )
-        return _build_openai_client("https://openrouter.ai/api/v1", OPENROUTER_API_KEY)
+        return _build_openai_client("https://openrouter.ai/api/v1", key)
     if PROVIDER == "ollama":
         # Ollama's OpenAI-compatible shim accepts any non-empty key.
         return _build_openai_client(OLLAMA_BASE_URL.rstrip("/") + "/v1", "ollama")

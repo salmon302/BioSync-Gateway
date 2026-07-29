@@ -34,6 +34,7 @@
 import http from 'k6/http';
 import ws from 'k6/ws';
 import { check, sleep } from 'k6';
+import { Trend } from 'k6/metrics';
 
 const BASE_URL = __ENV.BASE_URL || 'http://localhost:8000';
 const WS_URL = __ENV.WS_URL || 'ws://localhost:8000/api/telemetry/stream';
@@ -54,7 +55,13 @@ const thresholds = {
 };
 if (API_TOKEN) {
   thresholds.ws_connecting = ['p(95)<250'];
+  // NFR-P3 WS relay SLO: ping -> pong round-trip must stay under 50 ms at p95
+  // under the 50-VU load (R3 / PQ-1 real-load qualification).
+  thresholds.ws_relay_latency_ms = ['p(95)<50'];
 }
+
+// End-to-end WebSocket relay latency (ping -> pong RTT) in milliseconds.
+const ws_relay_latency_ms = new Trend('ws_relay_latency_ms', true);
 
 export const options = {
   scenarios: {
@@ -80,20 +87,33 @@ export function default() {
   // ---- WebSocket path (authenticated; skipped without API_TOKEN) ----
   if (API_TOKEN) {
     const url = `${WS_URL}?token=${API_TOKEN}`;
+    let ping_sent_at = 0;
     const r = ws.connect(url, function (socket) {
       socket.on('open', () => {
         socket.send(
           JSON.stringify({ type: 'subscribe', channels: WS_CHANNELS })
         );
       });
-      socket.on('message', () => {
-        // Server broadcasts telemetry; we only consume to exercise relay.
+      socket.on('message', (data) => {
+        // Server replies to a 'ping' with a 'pong'. Measure that relay RTT.
+        try {
+          const msg = JSON.parse(data);
+          if (msg.type === 'pong' && ping_sent_at > 0) {
+            ws_relay_latency_ms.add(Date.now() - ping_sent_at);
+            ping_sent_at = 0;
+          }
+        } catch (e) {
+          // ignore non-JSON frames
+        }
       });
-      // Exercise the relay with a few frames per VU iteration.
+      // Exercise the relay with several ping frames per VU iteration and
+      // record each round-trip.
       for (let i = 0; i < 5; i++) {
+        ping_sent_at = Date.now();
         socket.send(
-          JSON.stringify({ type: 'ping', ts: new Date().toISOString() })
+          JSON.stringify({ type: 'ping', ts: ping_sent_at })
         );
+        sleep(0.1);
       }
       socket.setTimeout(() => socket.close(), 5000);
     });

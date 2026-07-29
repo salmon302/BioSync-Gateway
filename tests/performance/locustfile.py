@@ -43,7 +43,11 @@ NFR_P6_CONCURRENT_WS = 500            # ≥ 500 concurrent WebSocket connections
 # JWT token for authenticated requests
 # ---------------------------------------------------------------------------
 
-JWT_SECRET = "your-super-secret-jwt-key-change-in-production"
+# JWT signing secret used to mint load-test tokens. Must match the gateway's
+# JWT_SECRET so requests authenticate. Reads the same env var the gateway uses
+# (defaults to the .env.example development secret) so a docker-compose stack
+# and this load test share one secret without hard-coding it here.
+JWT_SECRET = os.getenv("JWT_SECRET", "dev-only-insecure-secret-change-me")
 JWT_ALGORITHM = "HS256"
 
 
@@ -191,39 +195,49 @@ class WebSocketUser(HttpUser):
 
     @task(1)
     def connect_and_subscribe(self):
-        """Open a WebSocket connection and subscribe to channels."""
+        """Open a WebSocket connection, subscribe, and measure relay RTT."""
         import websocket
 
         try:
             ws = websocket.WebSocket()
             ws.connect(self.ws_url)
-            # Subscribe to all channels
             ws.send(json.dumps({
                 "type": "subscribe",
                 "channels": ["pressure", "flow", "hr", "spo2"],
             }))
-            # Wait for a few messages
+            # Drain the subscribe ack, then measure ping -> pong relay RTT
+            # (the server replies to a 'ping' with a 'pong' immediately).
             for _ in range(5):
-                try:
-                    msg = ws.recv()
-                    start = time.perf_counter()
-                    json.loads(msg)
-                    latency_ms = (time.perf_counter() - start) * 1000
-                    events.request_success.fire(
-                        request_type="ws_relay",
-                        name="message_relay_latency",
-                        response_time=int(latency_ms),
-                        response_length=len(msg),
-                    )
-                except websocket.WebSocketException:
+                t0 = time.perf_counter()
+                ws.send(json.dumps({"type": "ping"}))
+                relayed = False
+                for _ in range(10):
+                    try:
+                        msg = ws.recv()
+                    except websocket.WebSocketException:
+                        break
+                    try:
+                        if json.loads(msg).get("type") == "pong":
+                            relayed = True
+                            break
+                    except (ValueError, AttributeError):
+                        continue
+                latency_ms = (time.perf_counter() - t0) * 1000
+                events.request_success.fire(
+                    request_type="ws_relay",
+                    name="message_relay_latency",
+                    response_time=int(latency_ms),
+                    response_length=0,
+                )
+                if not relayed:
                     break
             ws.close()
-        except Exception:
+        except Exception as exc:
             events.request_failure.fire(
                 request_type="ws",
                 name="websocket_connect",
                 response_time=0,
-                exception=Exception("WebSocket connection failed"),
+                exception=exc,
             )
 
 

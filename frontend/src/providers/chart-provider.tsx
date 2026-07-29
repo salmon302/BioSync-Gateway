@@ -9,7 +9,7 @@ import * as echarts from 'echarts'
  * ECharts (Apache ECharts 5) is the sole rendering backend. The provider
  * abstraction interface is retained for future swappability, but only
  * the 'echarts' type is supported at runtime.
- * See: REMAINING_WORK.md §0 (deviation log), DEVELOPMENT_PLAN.md §2
+ * See: SNDEV/docs/deviation-2026-07-29-fr-3-1-3-scichart.md (formal deviation record).
  */
 
 export interface ChartConfig {

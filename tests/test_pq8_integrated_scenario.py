@@ -193,14 +193,21 @@ def test_pq8_concurrent_load():
             except Exception as exc:  # pragma: no cover - surfaced as test failure
                 errors.append(str(exc))
 
-        threads = [threading.Thread(target=worker) for _ in range(5)]
+        # PQ-8 load qualification: sustain concurrent scenario executions
+        # (NFR-P6-class concurrency on the scenario path) and assert all
+        # complete and capture their downstream LIMS result within budget.
+        N_WORKERS = 8
+        start = time.monotonic()
+        threads = [threading.Thread(target=worker) for _ in range(N_WORKERS)]
         for t in threads:
             t.start()
         for t in threads:
-            t.join()
+            t.join(timeout=180)
 
         assert not errors, f"concurrent scenario runs failed: {errors}"
-        assert len(_LimsHandler.received) == 5
+        assert all(not t.is_alive() for t in threads), "a worker timed out"
+        assert time.monotonic() - start < 180, "concurrent scenario runs exceeded budget"
+        assert len(_LimsHandler.received) == N_WORKERS
     finally:
         server.shutdown()
 

@@ -28,6 +28,8 @@ def test_provider_selection_openrouter_requires_key(monkeypatch):
     """Switching to openrouter without a key fails closed (C8 config-driven)."""
     monkeypatch.setattr(gw, "PROVIDER", "openrouter")
     monkeypatch.setattr(gw, "OPENROUTER_API_KEY", None)
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    monkeypatch.delenv("OPENROUTER_API_KEY_FILE", raising=False)
     with pytest.raises(RuntimeError):
         gw.generate_text("x")
 

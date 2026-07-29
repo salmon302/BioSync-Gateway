@@ -21,11 +21,41 @@ DATABASE_URL = os.getenv(
 )
 
 # TLS/SSL configuration for secure database connections
-# Implements SRS NFR-S4 - Transport Layer Security
-DB_SSLMODE = os.getenv("DB_SSLMODE", "prefer")  # disable, allow, prefer, require, verify-ca, verify-full
+# Implements SRS NFR-S4 (TLS) and NFR-S5 (DB client-certificate auth).
+#
+# Default sslmode is environment-aware (R2 remediation):
+#   * ENVIRONMENT=production  -> "verify-full"  (enforces mutual-TLS to
+#     PostgreSQL: server cert verified AND client cert presented, satisfying
+#     NFR-S5 "client-cert auth in addition to password"). Fail-closed.
+#   * any other value (development/test/CI) -> "prefer" so local/CI stacks
+#     without a PKI still connect; TLS is still attempted and used when the
+#     server offers it.
+# The default is always overridable via DB_SSLMODE (e.g. set "disable" for a
+# bare local Postgres with no TLS).
+_ENVIRONMENT = os.getenv("ENVIRONMENT", "development").lower()
+_DB_SSLMODE_DEFAULT = "verify-full" if _ENVIRONMENT == "production" else "prefer"
+DB_SSLMODE = os.getenv("DB_SSLMODE", _DB_SSLMODE_DEFAULT)
 DB_SSLROOTCERT = os.getenv("DB_SSLROOTCERT")  # Path to CA certificate
 DB_SSLCERT = os.getenv("DB_SSLCERT")  # Path to client certificate
 DB_SSLKEY = os.getenv("DB_SSLKEY")  # Path to client key
+
+if DB_SSLMODE in ("verify-ca", "verify-full"):
+    logger.info(
+        "Database TLS enforced: sslmode=%s (client-cert mutual-TLS active for NFR-S5)",
+        DB_SSLMODE,
+    )
+    if not DB_SSLROOTCERT and DB_SSLMODE == "verify-full":
+        logger.warning(
+            "DB_SSLMODE=verify-full but DB_SSLROOTCERT is unset; the server "
+            "certificate will be verified against the system CA bundle. Set "
+            "DB_SSLROOTCERT to the BioSync CA (certs/ca.crt) for mutual-TLS."
+        )
+elif _ENVIRONMENT == "production":
+    logger.warning(
+        "ENVIRONMENT=production but DB_SSLMODE=%s (not verify-full). Database "
+        "connections are NOT using mutual-TLS. Set DB_SSLMODE=verify-full for "
+        "NFR-S5 compliance.", DB_SSLMODE,
+    )
 
 # Build connection arguments for SSL/TLS
 connect_args = {}

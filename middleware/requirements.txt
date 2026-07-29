@@ -2,6 +2,9 @@
 fastapi==0.110.0
 uvicorn[standard]==0.27.1
 starlette==0.36.3
+# uvloop: high-performance event loop (R3 - NFR-P1/P3 PQ-1/PQ-8). uvicorn
+# selects it automatically when installed; main.py also sets the policy.
+uvloop==0.19.0
 
 # Database
 sqlalchemy==2.0.25

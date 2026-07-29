@@ -75,9 +75,10 @@ def pytest_configure(config):
     config.addinivalue_line("markers", "db: database-level tests")
     config.addinivalue_line("markers", "hf: human factors tests")
     config.addinivalue_line("markers", "slow: slow-running tests")
-    config.addinivalue_line("markers", "pq1: PQ-1 k6 real-load (replaces CI smoke-only import test)")
+    config.addinivalue_line("markers", "pq1: PQ-1 real Locust load (headless) + k6 real-load")
     config.addinivalue_line("markers", "pq3: PQ-3 1M-row hash-chain verification")
-    config.addinivalue_line("markers", "pq4: PQ-4 24h ingestion soak (deferred)")
+    config.addinivalue_line("markers", "pq4: PQ-4 24h ingestion soak (0 deadlocks, <=5% memory growth)")
+    config.addinivalue_line("markers", "ollama: real local-Ollama integration test (gated by BIOSYNC_OLLAMA_INTEGRATION)")
 
 
 # =============================================================================

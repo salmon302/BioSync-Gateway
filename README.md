@@ -62,7 +62,7 @@ flowchart TB
         MP["Microplate Editor<br/>(CSS Grid)"]
         AV["Audit Viewer<br/>(hash-chain integrity)"]
         AC["Admin Console"]
-        SD["Scenario Designer<br/>(FR-3.16 — planned)"]
+        SD["Scenario Designer<br/>(FR-3.16)"]
         HF["Human-Factors Tracker<br/>(passive metrics)"]
     end
 
@@ -72,8 +72,8 @@ flowchart TB
         ENG["Algorithmic Engines<br/>Hamming · Dilution · EMA"]
         PULSE["Pulse Worker Pool<br/>(ProcessPoolExecutor)"]
         SIM["Advanced Modules<br/>PK/PD · Chemistry · Twin · MRD"]
-        AI["LLM/RAG Gateway<br/>(async, swappable) — planned"]
-        SCN["Scenario Orchestrator<br/>— planned"]
+        AI["LLM/RAG Gateway<br/>(async, swappable, OpenAI-compat)"]
+        SCN["Scenario Orchestrator<br/>(FR-3.16)"]
     end
 
     subgraph DB["Compliance Storage Tier (PostgreSQL 15 + pgcrypto)"]
@@ -99,8 +99,8 @@ flowchart TB
     OBS --> AUD
     AUD --> HASH
 
-    classDef planned fill:#fff3cd,stroke:#d39e00;
-    class SD,AI,SCN planned;
+     classDef planned fill:#fff3cd,stroke:#d39e00;
+     %% SD/AI/SCN implemented 2026-07-29 (see "Current Status & Roadmap")
 ```
 
 **Three trust boundaries, intentionally separate:**
@@ -224,17 +224,18 @@ BioSync-Gateway/
 
 ## Current Status & Roadmap
 
-BioSync-Gateway is **actively developed against SRS v1.1**. The baseline (v1.0) compliance, security, and algorithmic engines are complete and tested; the advanced-analytics expansion is in progress:
+BioSync-Gateway is **broadly code-complete and demo-complete against SRS v1.1**. The baseline (v1.0) compliance, security, and algorithmic engines are complete and tested; the advanced-analytics expansion (FR-3.11–FR-3.16, including the LLM/RAG gateway and the Scenario Designer UI) is implemented. Remaining work is frontend-weighted and tracked below and in `SNDEV/docs/impl-2026-07-29-srs-status-and-remaining-work.md`.
 
 | Capability | State |
 |------------|-------|
 | Telemetry visualization, microplates, barcode safety, dilution solver, EMA, FHIR, audit/hash-chain, JWT auth, human-factors | ✅ Implemented & tested |
 | Pulse Engine integration (FR-3.6) | ✅ Real `PyPulse` built, runs, and qualified (19/19 IQ/OQ/PQ) |
 | Advanced modules — PK/PD, Clinical Chemistry, Digital Twin, MRD (FR-3.11–3.14) | ✅ Backend implemented, routed, unit-tested |
-| **LLM/RAG Clinical Text Gateway (FR-3.15)** | 🟡 Schema only — implementation next |
-| **Scenario Orchestrator + Scenario Designer UI (FR-3.16)** | 🟡 Schema only — orchestrator & UI next |
+| **LLM/RAG Clinical Text Gateway (FR-3.15)** | ✅ Implemented — `api/routes/ai.py` + `ai/llm_gateway.py` + `ai/rag.py`; swappable OpenRouter/Ollama/vLLM (default `mock` for no-key startup) |
+| **Scenario Orchestrator + Scenario Designer UI (FR-3.16)** | ✅ Implemented — `api/routes/scenarios.py` + `frontend/src/ScenarioDesigner`; NFR-U4 ≤5-interaction assembly verified |
+| **Frontend (all 5 surfaces + Analytics Results)** | ✅ Implemented; 89/89 vitest green. Residual frontend gaps tracked in `SNDEV/docs/impl-2026-07-29-srs-status-and-remaining-work.md` (GAP-1…GAP-9) |
 
-**Next priorities:** (1) FR-3.15 LLM/RAG gateway with swappable provider + local RAG; (2) FR-3.16 scenario orchestrator and frontend designer; (3) drive advanced modules from the live Pulse engine end-to-end; (4) close v1.0 carry-over gaps (authentic Illumina barcodes, live-path perf hardening, alarm 100 ms SLA test). See `SNDEV/docs/` for the detailed gap analysis and audit logs.
+**Next priorities (frontend-weighted residual, 2026-07-29):** (1) **GAP-1** — render the alarm *trace* color change to red (FR-3.1.5; today only a banner + ack button); (2) **GAP-2** — capture alarm-trigger→acknowledgment selection latency (FR-3.9.1); (3) **GAP-4** — make the telemetry WebSocket URL an env-configurable `wss://` endpoint (NFR-S4); (4) **GAP-5** — clamp the JWT-expiry UI field to the NFR-S3 cap (1 h access / 24 h refresh); (5) **GAP-3 / 6 / 7 / 9** — add the `concentration gradient` well state, add `frontend/src/types/fhir.ts`, add a dedicated LLM-output/provenance viewer, and use exponential WS reconnect. Two formal deviations are recorded: **FR-3.1.3** (SciChart.js backend removed; ECharts-only) and **SRS §9** (flat `middleware/` layout). See `SNDEV/docs/impl-2026-07-29-srs-status-and-remaining-work.md` for the full per-FR matrix and evidence.
 
 ### Pulse Engine Reliability Fixes (v1.1 R1)
 

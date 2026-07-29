@@ -311,66 +311,7 @@ class DilutionSolver:
                 conc_m = conc_g_per_ul * 1e6 / molar_mass
                 # Convert M to target unit
                 return conc_m / molar_units[to_unit]
-        
-        elif from_unit in mass_units:
-            # Mass/volume → Mass/volume
-            if to_unit in mass_units:
-                return concentration * (mass_units[from_unit] / mass_units[to_unit])
-            
-            # Mass/volume → Molar (requires molar mass)
-            elif to_unit in molar_units:
-                if molar_mass is None:
-                    raise ValueError(
-                        f"Molar mass required to convert {from_unit} to {to_unit}"
-                    )
-                # C (M) = C (ng/µL) / molar_mass / 1000
-                # Explanation with example:
-                # 66 ng/µL DNA with molar_mass = 66,000 g/mol
-                # 66 ng/µL = 66e-9 g/µL
-                # 1 g/µL = 1000 g/L
-                # So 66 ng/µL = 66e-6 g/L
-                # C (M) = 66e-6 g/L / 66,000 g/mol = 1e-9 M = 0.001 µM
-                # Wait, that's not 1 µM...
-                #
-                # Let me re-check: 1 µM = 1e-6 mol/L
-                # 1e-6 mol/L * 66,000 g/mol = 0.066 g/L
-                # 0.066 g/L = 66 ng/µL
-                # So 66 ng/µL = 1 µM. Good.
-                #
-                # Formula: C (M) = C (ng/µL) / molar_mass / 1000
-                # Check: 66 / 66000 / 1000 = 1e-9. That's 1 nM, not 1 µM.
-                #
-                # Ah, I see the issue. Let me re-derive:
-                # C (M) = C (g/L) / molar_mass
-                # C (g/L) = C (ng/µL) / 1000  (since 1 g/L = 1000 ng/µL)
-                # So C (M) = C (ng/µL) / 1000 / molar_mass
-                # Check: 66 / 1000 / 66000 = 1e-9. Still 1 nM.
-                #
-                # Wait, that can't be right. Let me use dimensional analysis:
-                # 66 ng/µL * (1 g / 1e9 ng) * (1e6 µL / 1 L) = 66e-3 g/L = 0.066 g/L
-                # C (M) = 0.066 g/L / 66000 g/mol = 1e-9 M
-                # So 66 ng/µL = 1e-9 M = 0.001 µM. Not 1 µM.
-                #
-                # I think the test might be wrong. Let me just implement the correct formula.
-                conc_g_per_l = concentration * mass_units[from_unit] / 1000  # Convert ng/µL to g/L
-                conc_m = conc_g_per_l / molar_mass  # Convert g/L to M
-                return conc_m / molar_units[to_unit]  # Convert M to target unit
-        
-        elif from_unit in mass_units:
-            # Mass/volume → Mass/volume
-            if to_unit in mass_units:
-                return concentration * (mass_units[from_unit] / mass_units[to_unit])
-            
-            # Mass/volume → Molar (requires molar mass)
-            elif to_unit in molar_units:
-                if molar_mass is None:
-                    raise ValueError(
-                        f"Molar mass required to convert {from_unit} to {to_unit}"
-                    )
-                # C (M) = C (g/µL) / molar_mass (g/mol) / 1e-6
-                conc_m = (concentration * mass_units[from_unit]) / molar_mass / 1e-6
-                return conc_m / molar_units[to_unit]
-        
+
         raise ValueError(f"Unsupported unit conversion: {from_unit} → {to_unit}")
 
 

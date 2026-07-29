@@ -87,37 +87,54 @@ class EMAFilter:
         self,
         step_input: float,
         steady_state: float,
-        tolerance: float = 0.05
+        tolerance: float = 0.05,
+        initial_value: float = 0.0
     ) -> Optional[int]:
         """
-        Calculate number of steps to converge within tolerance of steady state.
-        
+        Calculate the number of steps for the EMA output to converge within
+        `tolerance` of `steady_state` after a step input is applied.
+
+        To measure a true step response (the intent of SRS OQ-6), the filter is
+        seeded to `initial_value` (the pre-step steady state) before the step is
+        applied. The default ``initial_value=0.0`` matches the SRS OQ-6 nominal
+        case of a 0 → 100 step. Passing ``None`` reproduces the legacy
+        first-value initialization behaviour (the EMA is simply set to the first
+        observation), which is *not* a genuine step response and should not be
+        used to validate convergence.
+
         Args:
-            step_input: Step input value (xₜ for all t after step)
-            steady_state: Desired steady-state value
-            tolerance: Convergence threshold (fraction of steady-state)
-        
+            step_input: Step input value, held constant for every step
+            steady_state: Desired steady-state value the step converges to
+            tolerance: Convergence threshold (fraction of ``steady_state``)
+            initial_value: EMA seed representing the pre-step steady state
+
         Returns:
             Number of steps to converge, or None if not converged within 100 steps
-            
+
         Implements:
             SRS FR-3.5.2 - Step input convergence test (OQ-6)
         """
         # Reset filter
         self.reset()
-        
+
+        # Seed the pre-step steady state so the measurement reflects a genuine
+        # step response rather than the EMA's first-value initialization shortcut.
+        if initial_value is not None:
+            self.ema_value = initial_value
+            self.step_count = 0
+
         # Apply step input
         tolerance_value = tolerance * abs(steady_state)
         convergence_step = None
-        
+
         for step in range(1, 101):  # Max 100 steps
             filtered = self.filter_value(step_input)
             error = abs(filtered - steady_state)
-            
+
             if error < tolerance_value:
                 convergence_step = step
                 break
-        
+
         return convergence_step
     
     def reset(self):
@@ -286,38 +303,66 @@ class MultiChannelEMAFilter:
 # Test functions for OQ-6
 def run_oq6_test() -> Tuple[bool, str]:
     """
-    OQ-6: Step input convergence test
-    
-    Test: α=0.5, step 0→100, converge within 5% after ≤ 4 iterations
-    
+    OQ-6: Step input convergence test.
+
+    SRS OQ-6 nominal requirement: α=0.5, step 0 → 100, converge within 5%
+    after ≤ 4 iterations.
+
+    Mathematical analysis (α=0.5, 5% band): the EMA step-response error after n
+    iterations is ``|steady| · (1 - α)^n = |steady| · 0.5^n``.
+        n = 4 → 0.5^4 = 0.0625 > 0.05  (NOT within 5%)
+        n = 5 → 0.5^5 = 0.03125 < 0.05 (within 5%)
+    Therefore a genuine step response at α=0.5 cannot converge within 4 steps;
+    the earliest achievable step is 5. This is recorded as a FORMAL DEVIATION
+    from the SRS OQ-6 numeric step bound (see
+    SNDEV/docs/deviation-2026-07-29-oq6-step-bound.md). The validated acceptance
+    criterion is ≤ 5 steps. The ≤ 4-step requirement is satisfiable by raising
+    α (≥ 0.53) or widening the band (≥ 6.25%) should the strict bound be needed.
+
     Returns:
         Tuple of (passed, message)
-        
+
     Implements:
         SRS OQ-6 - EMA filter convergence validation
     """
-    ema = EMAFilter(alpha=0.5)
-    
-    # Apply step input: 0 → 100
+    # SRS nominal parameters
+    alpha = 0.5
     step_input = 100.0
     tolerance = 0.05  # 5%
-    
-    # Expected behavior: EMA converges to within 5% of 100 in ≤ 4 steps
-    # EMAₜ = 0.5 × 100 + 0.5 × EMAₜ₋₁
-    # Step 1: EMA = 50
-    # Step 2: EMA = 75
-    # Step 3: EMA = 87.5
-    # Step 4: EMA = 93.75 (within 5% of 100? |93.75 - 100| = 6.25 > 5)
-    # Step 5: EMA = 96.875 (within 5%? |96.875 - 100| = 3.125 < 5)
-    
-    convergence_step = ema.get_convergence_step(step_input, step_input, tolerance)
-    
+
+    SRS_MAX_STEPS = 4
+    VALIDATED_MAX_STEPS = 5  # formal-deviation bound (mathematically required)
+
+    ema = EMAFilter(alpha=alpha)
+
+    # Genuine step response: seed pre-step steady state = 0, then step to 100.
+    convergence_step = ema.get_convergence_step(
+        step_input, step_input, tolerance, initial_value=0.0
+    )
+
     if convergence_step is None:
         return False, "Filter did not converge within 100 steps"
-    elif convergence_step <= 5:  # SRS says ≤ 4, but 5 is acceptable with 5% tolerance
-        return True, f"Converged in {convergence_step} steps (within 5% tolerance)"
-    else:
-        return False, f"Converged in {convergence_step} steps (exceeds 4-step requirement)"
+
+    if convergence_step <= SRS_MAX_STEPS:
+        return True, (
+            f"Converged in {convergence_step} steps (within 5% tolerance) "
+            f"- meets SRS OQ-6 <= {SRS_MAX_STEPS} requirement"
+        )
+
+    # Formal deviation from the SRS OQ-6 numeric step bound.
+    if convergence_step <= VALIDATED_MAX_STEPS:
+        return True, (
+            f"FORMAL DEVIATION from SRS OQ-6 (<= {SRS_MAX_STEPS} steps): converged in "
+            f"{convergence_step} steps at alpha={alpha}/5% (genuine 0->100 step response). "
+            f"Acceptance relaxed to <= {VALIDATED_MAX_STEPS} steps, which is mathematically "
+            f"required at alpha={alpha}. Deviation: "
+            f"SNDEV/docs/deviation-2026-07-29-oq6-step-bound.md"
+        )
+
+    return False, (
+        f"Converged in {convergence_step} steps - exceeds validated bound "
+        f"<= {VALIDATED_MAX_STEPS} (SRS OQ-6 deviation limit)"
+    )
 
 
 def verify_ema_formula() -> bool:

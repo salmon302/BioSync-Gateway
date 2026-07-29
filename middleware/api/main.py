@@ -10,6 +10,7 @@ from contextlib import asynccontextmanager
 from starlette.middleware.base import BaseHTTPMiddleware
 import logging
 import os
+import sys
 import time
 from typing import Callable
 
@@ -17,6 +18,7 @@ from api.auth import get_current_user, User
 from api.middleware.response_time import ResponseTimeMiddleware, get_metrics
 from api.routes import health, audit, telemetry, plates, fhir, simulations, auth, admin, human_factors, pkpd, chemistry, digital_twin, mrd, ai, scenarios
 from engine import init_engines
+from api.loop_policy import configure_uvloop
 
 # Configure logging
 logging.basicConfig(
@@ -24,6 +26,10 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
+
+
+# Apply the high-performance event loop for the running ASGI server (R3).
+configure_uvloop()
 
 
 class PerformanceMiddleware(BaseHTTPMiddleware):
